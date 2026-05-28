@@ -3039,7 +3039,7 @@ def check_proxy_health() -> dict[str, Any]:
     cmd = [
         "curl", "-4", "-s",
         "-w", "\n%{time_total} %{http_code}",
-        "-x", f"socks5://127.0.0.1:{LOCAL_PROXY_PORT}",
+        "-x", f"socks5h://127.0.0.1:{LOCAL_PROXY_PORT}",
         "http://ip.sb",
         "--max-time", "5"
     ]
@@ -3460,7 +3460,7 @@ class Handler(BaseHTTPRequestHandler):
                         proxy_ok=False,
                         proxy_ip="-",
                         proxy_latency_ms=0,
-                        proxy_error=result.get("reason", "未知错误")
+                        proxy_error=result.get("error", "未知错误")
                     )
                 self.send_json(result)
             except Exception as exc:
