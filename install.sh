@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 set -e
-export DEBIAN_FRONTEND=noninteractive
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -9,43 +8,57 @@ BLUE='\033[0;36m'
 PLAIN='\033[0m'
 
 # 1. Check root permissions
-if [[ "$(id -u)" != "0" ]]; then
+if [ "$(id -u)" != "0" ]; then
     echo -e "${RED}错误: 必须以 root 权限运行此脚本。请使用: sudo bash $0${PLAIN}"
     exit 1
 fi
 
-# 2. Check OS distribution (Ubuntu only)
+# 2. Check OS distribution and set package manager
+OS_TYPE=""
+PKG_MGR=""
 if [ -f /etc/os-release ]; then
     . /etc/os-release
-    if [[ "${ID:-}" != "ubuntu" ]]; then
-        echo -e "${RED}错误: 本系统不是 Ubuntu！目前 AimiliVPN 仅支持 Ubuntu 系统。${PLAIN}"
-        exit 1
-    fi
-else
-    echo -e "${RED}错误: 无法确定操作系统版本，缺少 /etc/os-release 文件。${PLAIN}"
-    exit 1
+    OS_TYPE=$ID
 fi
+
+case "$OS_TYPE" in
+    ubuntu|debian)
+        PKG_MGR="apt-get"
+        export DEBIAN_FRONTEND=noninteractive
+        ;;
+    alpine)
+        PKG_MGR="apk"
+        ;;
+    *)
+        echo -e "${RED}错误: 不支持的操作系统 ($OS_TYPE)！目前仅支持 Ubuntu/Debian/Alpine。${PLAIN}"
+        exit 1
+        ;;
+esac
 
 echo -e "${BLUE}==========================================================${PLAIN}"
 echo -e "${BLUE}        欢迎使用 AimiliVPN 一键源码部署与管理脚本${PLAIN}"
 echo -e "${BLUE}==========================================================${PLAIN}"
 
 # 3. Configure GitHub Repository URL
-# Default to the official repository (baoweise-bot/aimili-vpngate)
 DEFAULT_USER="baoweise-bot"
 DEFAULT_REPO="aimili-vpngate"
-
-# Allow custom repository override via command line arguments
 GITHUB_USER="${1:-${DEFAULT_USER}}"
 GITHUB_REPO="${2:-${DEFAULT_REPO}}"
-
 GITHUB_URL="https://github.com/${GITHUB_USER}/${GITHUB_REPO}.git"
 
 echo -e "\n${YELLOW}[1/4] 正在安装系统基础依赖...${PLAIN}"
-echo -e "  -> 正在运行 apt-get update 更新软件源清单..."
-apt-get update -q || true
-echo -e "  -> 正在运行 apt-get install 安装基础依赖包 (openvpn, curl, git, iptables, iproute2, psmisc, python3)..."
-apt-get install -y openvpn curl git ca-certificates iptables iproute2 psmisc python3
+if [ "$PKG_MGR" = "apt-get" ]; then
+    echo -e "  -> 正在运行 apt-get update 更新软件源清单..."
+    apt-get update -q || true
+    echo -e "  -> 正在运行 apt-get install 安装基础依赖包..."
+    apt-get install -y openvpn curl git ca-certificates iptables iproute2 psmisc python3
+elif [ "$PKG_MGR" = "apk" ]; then
+    echo -e "  -> 正在运行 apk update 更新软件源清单..."
+    apk update || true
+    echo -e "  -> 正在运行 apk add 安装基础依赖包..."
+    # bash is required for this script itself and some internal logic
+    apk add openvpn curl git ca-certificates iptables iproute2 psmisc python3 bash
+fi
 
 # 4. Clone or pull the repository
 INSTALL_DIR="/opt/aimilivpn"
@@ -84,10 +97,11 @@ else
     fi
 fi
 
-# 5. Configure Systemd Service (direct python3 run)
-echo -e "\n${YELLOW}[3/4] 正在配置 systemd 系统服务...${PLAIN}"
-echo -e "  -> 正在创建服务配置 /lib/systemd/system/aimilivpn.service ..."
-cat > /lib/systemd/system/aimilivpn.service <<EOF
+# 5. Configure Service
+echo -e "\n${YELLOW}[3/4] 正在配置系统服务...${PLAIN}"
+if command -v systemctl >/dev/null 2>&1; then
+    echo -e "  -> 检测到 systemd，正在创建服务配置 /lib/systemd/system/aimilivpn.service ..."
+    cat > /lib/systemd/system/aimilivpn.service <<EOF
 [Unit]
 Description=AimiliVPN OpenVPN Manager with HTTP/SOCKS5 Proxy
 After=network.target
@@ -103,10 +117,30 @@ EnvironmentFile=-/etc/default/aimilivpn
 [Install]
 WantedBy=multi-user.target
 EOF
+    systemctl daemon-reload
+    systemctl enable aimilivpn.service
+elif command -v rc-service >/dev/null 2>&1; then
+    echo -e "  -> 检测到 OpenRC，正在创建服务配置 /etc/init.d/aimilivpn ..."
+    cat > /etc/init.d/aimilivpn <<EOF
+#!/sbin/openrc-run
 
-echo -e "  -> 正在重新加载 systemd 系统服务列表并启用开机自启..."
-systemctl daemon-reload
-systemctl enable aimilivpn.service
+description="AimiliVPN OpenVPN Manager with HTTP/SOCKS5 Proxy"
+command="/usr/bin/python3"
+command_args="${INSTALL_DIR}/vpngate_manager.py"
+command_background="yes"
+directory="${INSTALL_DIR}"
+pidfile="/run/aimilivpn.pid"
+
+depend() {
+    need net
+    after firewall
+}
+EOF
+    chmod +x /etc/init.d/aimilivpn
+    rc-update add aimilivpn default
+else
+    echo -e "${YELLOW}警告: 未能检测到 systemd 或 OpenRC，请手动管理服务。${PLAIN}"
+fi
 
 # 6. Configure global command shortcut "ml"
 echo -e "\n${YELLOW}[4/4] 正在创建全局命令快捷接口 'ml'...${PLAIN}"
@@ -379,21 +413,29 @@ def print_status():
     print_line(f"  export https_proxy=socks5://127.0.0.1:7928")
     print_line("=======================================================")
 
+def run_service_cmd(cmd):
+    if os.path.exists("/usr/bin/systemctl"):
+        subprocess.run(["systemctl", cmd, "aimilivpn.service"])
+    elif os.path.exists("/sbin/rc-service"):
+        subprocess.run(["rc-service", "aimilivpn", cmd])
+    else:
+        print("未检测到支持的服务管理器 (systemd/OpenRC)")
+
 def start_service():
     print("正在启动 AimiliVPN 服务...", flush=True)
-    subprocess.run(["systemctl", "start", "aimilivpn.service"])
+    run_service_cmd("start")
     print("已发送启动指令。")
     time.sleep(1)
 
 def stop_service():
     print("正在停止 AimiliVPN 服务...", flush=True)
-    subprocess.run(["systemctl", "stop", "aimilivpn.service"])
+    run_service_cmd("stop")
     print("已发送停止指令。")
     time.sleep(1)
 
 def restart_service():
     print("正在重启 AimiliVPN 服务...", flush=True)
-    subprocess.run(["systemctl", "restart", "aimilivpn.service"])
+    run_service_cmd("restart")
     print("已发送重启指令。")
     time.sleep(1)
 
@@ -469,12 +511,19 @@ def uninstall_service():
     confirm = input("确定要完全卸载 AimiliVPN 吗？(y/N): ")
     if confirm.lower() == 'y':
         print("正在完全卸载 AimiliVPN...", flush=True)
-        subprocess.run(["systemctl", "stop", "aimilivpn.service"])
-        subprocess.run(["systemctl", "disable", "aimilivpn.service"])
-        try:
-            os.unlink("/lib/systemd/system/aimilivpn.service")
-        except Exception:
-            pass
+        stop_service()
+        if os.path.exists("/usr/bin/systemctl"):
+            subprocess.run(["systemctl", "disable", "aimilivpn.service"])
+            try:
+                os.unlink("/lib/systemd/system/aimilivpn.service")
+            except Exception:
+                pass
+        elif os.path.exists("/sbin/rc-service"):
+            subprocess.run(["rc-update", "del", "aimilivpn"])
+            try:
+                os.unlink("/etc/init.d/aimilivpn")
+            except Exception:
+                pass
         try:
             os.unlink("/usr/bin/ml")
         except Exception:
@@ -490,7 +539,7 @@ def ask_restart():
     ans = input("配置已保存。是否立即重启服务生效？(Y/n): ").strip().lower()
     if ans in ('', 'y', 'yes'):
         print("正在重启 AimiliVPN 服务...", flush=True)
-        subprocess.run(["systemctl", "restart", "aimilivpn.service"])
+        restart_service()
         print("服务已重启。")
         time.sleep(1.5)
 
@@ -905,7 +954,11 @@ fi
 
 # 8. Start service
 echo -e "\n正在启动 AimiliVPN 服务并初始化网络..."
-systemctl restart aimilivpn.service || true
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl restart aimilivpn.service || true
+elif command -v rc-service >/dev/null 2>&1; then
+    rc-service aimilivpn restart || true
+fi
 
 # Wait and poll for node loading and active connection
 echo -e "\n正在等待 AimiliVPN 首次获取节点并建立加密通道 (此过程可能需要 5-30 秒)..."
