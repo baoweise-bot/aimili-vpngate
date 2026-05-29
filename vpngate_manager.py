@@ -2150,19 +2150,23 @@ INDEX_HTML = r"""<!doctype html>
       更新节点
     </button>
     <button id="check" class="btn-primary">
-      <svg xmlns="http://www.w3.org/2000/svg" style="width:16px; height:16px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 8H18.5" /></svg>
+      <svg xmlns="http://www.w3.org/2000/svg" style="width:16px; height:16px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
       立即检测补齐
+    </button>
+    <button onclick="openRoutingModal()" class="btn-primary" style="background: linear-gradient(135deg, #a855f7 0%, #7c3aed 100%);">
+      <svg xmlns="http://www.w3.org/2000/svg" style="width:16px; height:16px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" /></svg>
+      出站路由
     </button>
     <div class="dropdown">
       <button id="admin_btn" class="btn-primary" style="background: rgba(255, 255, 255, 0.08); border: 1px solid var(--border-color); color: var(--text-primary);">
         <svg xmlns="http://www.w3.org/2000/svg" style="width:16px; height:16px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
         管理员
-        <svg xmlns="http://www.w3.org/2000/svg" style="width:12px; height:12px; margin-left: 2px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" /></svg>
+        <svg xmlns="http://www.w3.org/2000/svg; width:12px; height:12px; margin-left: 2px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" /></svg>
       </button>
       <div id="admin_dropdown" class="dropdown-content">
         <a href="javascript:void(0)" onclick="openSettingsModal()">
           <svg xmlns="http://www.w3.org/2000/svg" style="width:14px; height:14px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-          设置
+          管理员设置
         </a>
         <a href="javascript:void(0)" onclick="logoutAdmin()" style="color: var(--danger); border-top: 1px solid rgba(255,255,255,0.05);">
           <svg xmlns="http://www.w3.org/2000/svg" style="width:14px; height:14px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg>
@@ -2354,10 +2358,47 @@ INDEX_HTML = r"""<!doctype html>
             <input type="password" id="settings_new_password" class="input-field" placeholder="留空则不修改">
           </div>
         </div>
-
-        <div style="border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 16px; margin-bottom: 16px;">
-          <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); font-weight: 600; margin-bottom: 12px;">出站IP路由设置</div>
+        
+        <div style="margin-bottom: 24px;">
+          <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); font-weight: 600; margin-bottom: 12px;">安全验证 (必须输入当前账号密码)</div>
           
+          <div class="form-group" style="margin-bottom: 12px;">
+            <label class="form-label" for="settings_curr_username">当前管理账号</label>
+            <input type="text" id="settings_curr_username" class="input-field" required placeholder="请输入当前管理账号">
+          </div>
+          
+          <div class="form-group">
+            <label class="form-label" for="settings_curr_password">当前安全密码</label>
+            <input type="password" id="settings_curr_password" class="input-field" required placeholder="请输入当前安全密码">
+          </div>
+        </div>
+        
+        <div style="display: flex; gap: 12px; justify-content: flex-end;">
+          <button type="button" onclick="closeSettingsModal()" style="height: 40px; padding: 0 16px; font-weight: 600; border-radius: 8px; border: 1px solid var(--border-color); background: transparent; color: var(--text-secondary); cursor: pointer;">取消</button>
+          <button type="submit" id="settings_submit_btn" class="btn-primary" style="height: 40px; padding: 0 20px; font-weight: 600; border-radius: 8px;">保存修改</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Routing Modal -->
+  <div id="routing_modal" class="modal">
+    <div class="modal-content" style="max-width: 460px;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+        <h3 style="margin: 0; font-size: 18px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
+          <svg xmlns="http://www.w3.org/2000/svg" style="width:20px; height:20px; color: #a855f7;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" /></svg>
+          出站 IP 路由设置
+        </h3>
+        <button type="button" onclick="closeRoutingModal()" style="background: transparent; border: none; padding: 4px; cursor: pointer; color: var(--text-secondary); width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 50%;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">
+          <svg xmlns="http://www.w3.org/2000/svg" style="width:18px; height:18px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+        </button>
+      </div>
+      
+      <div id="routing_error" style="color: var(--danger); font-size: 13px; margin-bottom: 16px; padding: 8px 12px; background: rgba(244,63,94,0.1); border: 1px solid rgba(244,63,94,0.2); border-radius: 6px; display: none;"></div>
+      <div id="routing_success" style="color: var(--success); font-size: 13px; margin-bottom: 16px; padding: 8px 12px; background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.2); border-radius: 6px; display: none;"></div>
+
+      <form id="routing_form" onsubmit="saveRoutingSettings(event)">
+        <div style="margin-bottom: 20px;">
           <div class="form-group" style="margin-bottom: 12px;">
             <label class="form-label" for="settings_routing_mode">IP 路由模式</label>
             <select id="settings_routing_mode" class="input-field" style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); color: var(--text-primary); outline: none; cursor: pointer; width: 100%; height: 40px; border-radius: 8px; padding: 0 12px;" onchange="handleRoutingModeChange(this.value)">
@@ -2379,23 +2420,9 @@ INDEX_HTML = r"""<!doctype html>
           </div>
         </div>
         
-        <div style="margin-bottom: 24px;">
-          <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); font-weight: 600; margin-bottom: 12px;">安全验证 (必须输入当前账号密码)</div>
-          
-          <div class="form-group" style="margin-bottom: 12px;">
-            <label class="form-label" for="settings_curr_username">当前管理账号</label>
-            <input type="text" id="settings_curr_username" class="input-field" required placeholder="请输入当前管理账号">
-          </div>
-          
-          <div class="form-group">
-            <label class="form-label" for="settings_curr_password">当前安全密码</label>
-            <input type="password" id="settings_curr_password" class="input-field" required placeholder="请输入当前安全密码">
-          </div>
-        </div>
-        
         <div style="display: flex; gap: 12px; justify-content: flex-end;">
-          <button type="button" onclick="closeSettingsModal()" style="height: 40px; padding: 0 16px; font-weight: 600; border-radius: 8px; border: 1px solid var(--border-color); background: transparent; color: var(--text-secondary); cursor: pointer;">取消</button>
-          <button type="submit" id="settings_submit_btn" class="btn-primary" style="height: 40px; padding: 0 20px; font-weight: 600; border-radius: 8px;">保存修改</button>
+          <button type="button" onclick="closeRoutingModal()" style="height: 40px; padding: 0 16px; font-weight: 600; border-radius: 8px; border: 1px solid var(--border-color); background: transparent; color: var(--text-secondary); cursor: pointer;">取消</button>
+          <button type="submit" id="routing_submit_btn" class="btn-primary" style="height: 40px; padding: 0 20px; font-weight: 600; border-radius: 8px; background: linear-gradient(135deg, #a855f7 0%, #7c3aed 100%);">保存路由配置</button>
         </div>
       </form>
     </div>
@@ -3039,7 +3066,7 @@ function handleRoutingModeChange(mode) {
   }
 }
 
-function populateSettingsCountries() {
+function populateRoutingCountries() {
   const select = $("settings_force_country");
   const countMap = {};
   nodes.forEach(n => {
@@ -3063,6 +3090,72 @@ function populateSettingsCountries() {
   }
 }
 
+function openRoutingModal() {
+  $("routing_error").style.display = "none";
+  $("routing_success").style.display = "none";
+  $("routing_form").reset();
+  populateRoutingCountries();
+  $("routing_modal").style.display = "flex";
+  $("admin_dropdown").style.display = "none";
+}
+
+function closeRoutingModal() {
+  $("routing_modal").style.display = "none";
+}
+
+async function saveRoutingSettings(e) {
+  e.preventDefault();
+  const errorDivEl = $("routing_error");
+  const successDiv = $("routing_success");
+  const submitBtn = $("routing_submit_btn");
+  
+  errorDivEl.style.display = "none";
+  successDiv.style.display = "none";
+  
+  const routingMode = $("settings_routing_mode").value;
+  const forceCountry = $("settings_force_country").value;
+  
+  if (routingMode === "fixed_region" && !forceCountry) {
+    errorDivEl.textContent = "请选择一个要锁定的目标国家";
+    errorDivEl.style.display = "block";
+    return;
+  }
+  
+  submitBtn.disabled = true;
+  submitBtn.textContent = "正在保存...";
+  
+  try {
+    const res = await fetch("./api/update_routing", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        routing_mode: routingMode,
+        force_country: forceCountry
+      })
+    });
+    
+    const data = await res.json();
+    if (res.ok && data.ok) {
+      successDiv.textContent = "路由配置保存成功，已即时生效！";
+      successDiv.style.display = "block";
+      setTimeout(() => {
+        closeRoutingModal();
+        load();
+      }, 1500);
+    } else {
+      errorDivEl.textContent = data.error || "保存失败，请检查输入";
+      errorDivEl.style.display = "block";
+      submitBtn.disabled = false;
+      submitBtn.textContent = "保存路由配置";
+    }
+  } catch (err) {
+    errorDivEl.textContent = "保存失败，请重试";
+    errorDivEl.style.display = "block";
+    submitBtn.disabled = false;
+    submitBtn.textContent = "保存路由配置";
+  }
+}
+
 function openSettingsModal() {
   $("settings_error").style.display = "none";
   $("settings_success").style.display = "none";
@@ -3072,8 +3165,6 @@ function openSettingsModal() {
     $("settings_port").value = state.port || 8787;
     $("settings_suffix").value = state.secret_path || "EJsW2EeBo9lY";
   }
-  
-  populateSettingsCountries();
   
   $("settings_modal").style.display = "flex";
   $("admin_dropdown").style.display = "none";
@@ -3098,8 +3189,6 @@ async function saveSettings(e) {
   const newPassword = $("settings_new_password").value.trim();
   const currUsername = $("settings_curr_username").value.trim();
   const currPassword = $("settings_curr_password").value.trim();
-  const routingMode = $("settings_routing_mode").value;
-  const forceCountry = $("settings_force_country").value;
   
   if (isNaN(port) || port < 1 || port > 65535) {
     errorDivEl.textContent = "端口范围必须在 1 至 65535 之间";
@@ -3109,12 +3198,6 @@ async function saveSettings(e) {
   
   if (!/^[A-Za-z0-9]+$/.test(suffix)) {
     errorDivEl.textContent = "登录安全后缀仅能由英文字母和数字组成";
-    errorDivEl.style.display = "block";
-    return;
-  }
-  
-  if (routingMode === "fixed_region" && !forceCountry) {
-    errorDivEl.textContent = "请选择一个要锁定的目标国家";
     errorDivEl.style.display = "block";
     return;
   }
@@ -3132,9 +3215,7 @@ async function saveSettings(e) {
         new_username: newUsername,
         new_password: newPassword,
         curr_username: currUsername,
-        curr_password: currPassword,
-        routing_mode: routingMode,
-        force_country: forceCountry
+        curr_password: currPassword
       })
     });
     
@@ -3553,12 +3634,6 @@ class Handler(BaseHTTPRequestHandler):
                 new_suffix = str(payload.get("secret_path") or "").strip()
                 new_username = str(payload.get("new_username") or "").strip()
                 new_password = str(payload.get("new_password") or "").strip()
-                routing_mode = str(payload.get("routing_mode") or "auto").strip()
-                force_country = str(payload.get("force_country") or "").strip()
-                
-                if routing_mode not in ("auto", "fixed_ip", "fixed_region"):
-                    self.send_json({"ok": False, "error": "无效的路由配置模式"}, HTTPStatus.BAD_REQUEST)
-                    return
                 
                 if not curr_username or not curr_password:
                     self.send_json({"ok": False, "error": "请输入当前账号和密码进行安全验证"}, HTTPStatus.FORBIDDEN)
@@ -3588,9 +3663,6 @@ class Handler(BaseHTTPRequestHandler):
                 
                 ui_cfg["port"] = new_port_int
                 ui_cfg["secret_path"] = new_suffix
-                ui_cfg["routing_mode"] = routing_mode
-                ui_cfg["force_country"] = force_country
-                ui_cfg.pop("enable_force_country", None)
                 if new_username:
                     ui_cfg["username"] = new_username
                 if new_password:
@@ -3613,6 +3685,32 @@ class Handler(BaseHTTPRequestHandler):
                     threading.Thread(target=restart_server, daemon=True).start()
                 else:
                     self.send_json({"ok": True, "restart_needed": False, "message": "配置更新成功，已即时生效！"})
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        elif effective_path == "/api/update_routing":
+            try:
+                length = parse_int(self.headers.get("Content-Length"))
+                payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+                routing_mode = str(payload.get("routing_mode") or "auto").strip()
+                force_country = str(payload.get("force_country") or "").strip()
+                
+                if routing_mode not in ("auto", "fixed_ip", "fixed_region"):
+                    self.send_json({"ok": False, "error": "无效的路由配置模式"}, HTTPStatus.BAD_REQUEST)
+                    return
+                
+                ui_cfg = load_ui_config()
+                ui_cfg["routing_mode"] = routing_mode
+                ui_cfg["force_country"] = force_country
+                ui_cfg.pop("enable_force_country", None)
+                
+                auth_file = DATA_DIR / "ui_auth.json"
+                with lock:
+                    DATA_DIR.mkdir(exist_ok=True, parents=True)
+                    auth_file.write_text(json.dumps(ui_cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+                
+                self.send_json({"ok": True, "message": "出站路由配置更新成功，已即时生效！"})
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
