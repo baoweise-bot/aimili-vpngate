@@ -51,6 +51,9 @@ INVALID_BACKOFF_SECONDS = int(os.environ.get("INVALID_BACKOFF_SECONDS", str(30 *
 TUN_DEV = os.environ.get("TUN_DEV", "tun0")
 POLICY_TABLE = os.environ.get("POLICY_TABLE", "100")
 INSTANCE_ID = os.environ.get("INSTANCE_ID", "")
+_allowed_raw = os.environ.get("ALLOWED_COUNTRIES", "").strip().upper()
+ALLOWED_COUNTRIES: set[str] = {c.strip() for c in _allowed_raw.split(",") if c.strip()} if _allowed_raw else set()
+EXCLUDE_DATACENTER = os.environ.get("EXCLUDE_DATACENTER", "0") == "1"
 
 ROOT_DIR = Path(sys.executable).resolve().parent if globals().get("__compiled__") else Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ["VPNGATE_DATA_DIR"]).resolve() if os.environ.get("VPNGATE_DATA_DIR") else ROOT_DIR / "vpngate_data"
@@ -317,6 +320,10 @@ def fetch_candidates() -> list[dict[str, Any]]:
                 ip = row.get("IP", "")
                 if not ip or ip in seen_ips:
                     continue
+                if ALLOWED_COUNTRIES:
+                    cs = (row.get("CountryShort") or "").strip().upper()
+                    if cs not in ALLOWED_COUNTRIES:
+                        continue
                 encoded = row.get("OpenVPN_ConfigData_Base64", "")
                 if not encoded:
                     continue
@@ -780,9 +787,10 @@ def auto_switch_node(attempt: int = 0) -> None:
     with lock:
         nodes = read_json(NODES_FILE, [])
         candidates = [
-            n for n in nodes 
-            if n.get("probe_status") == "available" 
+            n for n in nodes
+            if n.get("probe_status") == "available"
             and not n.get("active")
+            and (not EXCLUDE_DATACENTER or n.get("quality") != "datacenter")
         ]
         candidates.sort(key=lambda n: (parse_int(n.get("latency_ms")) or 999999, -parse_int(n.get("score"))))
         
