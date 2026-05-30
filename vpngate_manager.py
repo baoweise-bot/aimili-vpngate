@@ -3588,7 +3588,7 @@ def main() -> None:
             "blacklisted_nodes": 0,
         },
     )
-    threading.Thread(target=proxy_server.start_proxy_server, args=(LOCAL_PROXY_HOST, LOCAL_PROXY_PORT), daemon=True).start()
+    threading.Thread(target=proxy_server.start_proxy_server, args=(LOCAL_PROXY_HOST, LOCAL_PROXY_PORT, TUN_DEV), daemon=True).start()
     
     # Wait for the gateway to officially start
     print("[网关] 正在启动代理网关...", flush=True)
