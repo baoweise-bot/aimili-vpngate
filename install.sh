@@ -84,12 +84,36 @@ else
     fi
 fi
 
-# 5. Configure Systemd Service (direct python3 run)
-echo -e "\n${YELLOW}[3/4] 正在配置 systemd 系统服务...${PLAIN}"
-echo -e "  -> 正在创建服务配置 /lib/systemd/system/aimilivpn.service ..."
-cat > /lib/systemd/system/aimilivpn.service <<EOF
+# 5. Configure Systemd Service (multi-instance template)
+echo -e "\n${YELLOW}[3/4] 正在配置 systemd 系统服务（多实例模板）...${PLAIN}"
+
+# Disable & remove legacy single-instance unit if present (port 7928 / tun0 conflict)
+if [ -f /lib/systemd/system/aimilivpn.service ] && [ ! -L /lib/systemd/system/aimilivpn.service ]; then
+    if grep -q "^ExecStart=/usr/bin/python3 vpngate_manager.py$" /lib/systemd/system/aimilivpn.service 2>/dev/null; then
+        echo -e "  -> 检测到旧版单实例 aimilivpn.service，正在停用并清理..."
+        systemctl disable --now aimilivpn.service 2>/dev/null || true
+        rm -f /lib/systemd/system/aimilivpn.service
+    fi
+fi
+
+# Country -> tun device, policy table, proxy port, UI port mapping (deterministic)
+# JP: tun10/table110/proxy 7928/UI 8788
+# US: tun11/table111/proxy 7929/UI 8789
+# KR: tun12/table112/proxy 7930/UI 8790
+declare -A TUN_DEV_MAP=(  [JP]=tun10 [US]=tun11 [KR]=tun12 )
+declare -A POLICY_MAP=(   [JP]=110   [US]=111   [KR]=112   )
+declare -A PROXY_PORT_MAP=( [JP]=7928 [US]=7929 [KR]=7930 )
+declare -A UI_PORT_MAP=(  [JP]=8788  [US]=8789  [KR]=8790 )
+
+# Allow override via COUNTRIES=JP,US env var; default JP,US,KR
+COUNTRIES="${COUNTRIES:-JP,US,KR}"
+
+mkdir -p /etc/aimilivpn
+
+echo -e "  -> 正在创建 systemd 模板单元 /lib/systemd/system/aimilivpn@.service ..."
+cat > /lib/systemd/system/aimilivpn@.service <<EOF
 [Unit]
-Description=AimiliVPN OpenVPN Manager with HTTP/SOCKS5 Proxy
+Description=AimiliVPN OpenVPN Manager (instance %i)
 After=network.target
 
 [Service]
@@ -98,15 +122,45 @@ WorkingDirectory=${INSTALL_DIR}
 ExecStart=/usr/bin/python3 vpngate_manager.py
 Restart=always
 RestartSec=5
-EnvironmentFile=-/etc/default/aimilivpn
+EnvironmentFile=/etc/aimilivpn/%i.env
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-echo -e "  -> 正在重新加载 systemd 系统服务列表并启用开机自启..."
+# Generate per-country env files
+IFS=',' read -ra CC_LIST <<< "$COUNTRIES"
+for CC in "${CC_LIST[@]}"; do
+    CC="${CC^^}"
+    if [ -z "${TUN_DEV_MAP[$CC]:-}" ]; then
+        echo -e "${YELLOW}  -> 跳过未定义的国家代码: ${CC}（仅支持 JP/US/KR）${PLAIN}"
+        continue
+    fi
+    ENV_FILE="/etc/aimilivpn/${CC,,}.env"
+    DATA_DIR="${INSTALL_DIR}/data/${CC,,}"
+    mkdir -p "$DATA_DIR"
+    cat > "$ENV_FILE" <<EOF
+INSTANCE_ID=${CC,,}
+TUN_DEV=${TUN_DEV_MAP[$CC]}
+POLICY_TABLE=${POLICY_MAP[$CC]}
+LOCAL_PROXY_HOST=127.0.0.1
+LOCAL_PROXY_PORT=${PROXY_PORT_MAP[$CC]}
+UI_HOST=0.0.0.0
+UI_PORT=${UI_PORT_MAP[$CC]}
+ALLOWED_COUNTRIES=${CC}
+EXCLUDE_DATACENTER=1
+VPNGATE_DATA_DIR=${DATA_DIR}
+EOF
+    chmod 600 "$ENV_FILE"
+    echo -e "  -> ${GREEN}[${CC}]${PLAIN} 已生成 ${ENV_FILE} (tun ${TUN_DEV_MAP[$CC]}, proxy ${PROXY_PORT_MAP[$CC]}, UI ${UI_PORT_MAP[$CC]})"
+done
+
+echo -e "  -> 正在重新加载 systemd 系统服务列表并启用各实例开机自启..."
 systemctl daemon-reload
-systemctl enable aimilivpn.service
+for CC in "${CC_LIST[@]}"; do
+    CC="${CC,,}"
+    [ -f "/etc/aimilivpn/${CC}.env" ] && systemctl enable "aimilivpn@${CC}.service" >/dev/null 2>&1 || true
+done
 
 # 6. Configure global command shortcut "ml"
 echo -e "\n${YELLOW}[4/4] 正在创建全局命令快捷接口 'ml'...${PLAIN}"
@@ -805,19 +859,17 @@ if __name__ == "__main__":
 EOF
 chmod +x /usr/bin/ml
 
-# 7. Configure Custom parameters (First-time installation check)
-AUTH_FILE="${INSTALL_DIR}/vpngate_data/ui_auth.json"
-mkdir -p "${INSTALL_DIR}/vpngate_data"
+# 7. Configure shared UI auth (one login for all instances)
+echo -e "\n${YELLOW}[4/4] 正在配置网页管理凭据（所有国家实例共用同一组登录）...${PLAIN}"
 
-if [ ! -f "$AUTH_FILE" ]; then
-    echo -e "\n${YELLOW}检测到是首次安装，是否需要自定义配置网页端参数（端口/安全后缀/登录账号密码）？${PLAIN}"
+FIRST_CC="${CC_LIST[0],,}"
+FIRST_AUTH_FILE="${INSTALL_DIR}/data/${FIRST_CC}/ui_auth.json"
+
+if [ ! -f "$FIRST_AUTH_FILE" ]; then
+    echo -e "${YELLOW}检测到是首次安装，是否需要自定义配置网页端参数（安全后缀/登录账号密码）？${PLAIN}"
     read -p "是否自定义配置？[y/N]: " is_custom
-    
-    # Initialize defaults
-    UI_PORT=8787
-    # generate random secret suffix (12 chars alphanumeric)
+
     SECRET_PATH=$(python3 -c "import random, string; print(''.join(random.choices(string.ascii_letters + string.digits, k=12)))")
-    # generate random password
     UI_PASSWORD=$(python3 -c "
 import random, string
 chars = string.ascii_letters + string.digits
@@ -838,23 +890,6 @@ while True:
 ")
 
     if [[ "$is_custom" =~ ^[Yy]$ ]]; then
-        # Step-by-step custom inputs
-        # 1. Custom port
-        while true; do
-            read -p "请输入自定义管理端口 [1-65535, 默认 8787]: " input_port
-            if [ -z "$input_port" ]; then
-                UI_PORT=8787
-                break
-            fi
-            if [[ "$input_port" =~ ^[0-9]+$ ]] && [ "$input_port" -ge 1 ] && [ "$input_port" -le 65535 ]; then
-                UI_PORT=$input_port
-                break
-            else
-                echo -e "${RED}输入错误: 端口必须是 1 到 65535 之间的数字！${PLAIN}"
-            fi
-        done
-        
-        # 2. Custom suffix
         while true; do
             read -p "请输入网页登录自定义安全后缀 [字母与数字组合, 默认随机]: " input_suffix
             if [ -z "$input_suffix" ]; then
@@ -867,13 +902,12 @@ while True:
                 echo -e "${RED}输入错误: 后缀仅能由英文字母和数字组成！${PLAIN}"
             fi
         done
-        
-        # 3. Custom login username and password
+
         read -p "请输入登录账号 [默认 $UI_USERNAME]: " input_user
         if [ -n "$input_user" ]; then
             UI_USERNAME=$input_user
         fi
-        
+
         while true; do
             read -p "请输入登录密码 [默认随机生成, 建议包含字母、数字与符号]: " input_pass
             if [ -z "$input_pass" ]; then
@@ -888,88 +922,73 @@ while True:
         done
     fi
 
-    # Write config JSON
-    python3 -c "
+    # Write the same auth JSON into each instance data dir
+    for CC in "${CC_LIST[@]}"; do
+        CC="${CC,,}"
+        [ -f "/etc/aimilivpn/${CC}.env" ] || continue
+        DD="${INSTALL_DIR}/data/${CC}"
+        mkdir -p "$DD"
+        UI_PORT_VAL="${UI_PORT_MAP[${CC^^}]}"
+        python3 -c "
 import json
 cfg = {
     'host': '0.0.0.0',
-    'port': int('$UI_PORT'),
+    'port': int('$UI_PORT_VAL'),
     'secret_path': '$SECRET_PATH',
     'username': '$UI_USERNAME',
-    'password': '$UI_PASSWORD'
+    'password': '$UI_PASSWORD',
 }
-with open('$AUTH_FILE', 'w', encoding='utf-8') as f:
+with open('${DD}/ui_auth.json', 'w', encoding='utf-8') as f:
     json.dump(cfg, f, ensure_ascii=False, indent=2)
 "
+    done
 fi
 
-# 8. Start service
-echo -e "\n正在启动 AimiliVPN 服务并初始化网络..."
-systemctl restart aimilivpn.service || true
-
-# Wait and poll for node loading and active connection
-echo -e "\n正在等待 AimiliVPN 首次获取节点并建立加密通道 (此过程可能需要 5-30 秒)..."
-ACTIVE_ID=""
-LAST_MSG=""
-for i in {1..90}; do
-    if [ -f "${INSTALL_DIR}/vpngate_data/state.json" ]; then
-        ACTIVE_ID=$(python3 -c "import json; print(json.load(open('${INSTALL_DIR}/vpngate_data/state.json')).get('active_openvpn_node_id', ''))" 2>/dev/null || echo "")
-        IS_CONN=$(python3 -c "import json; print(json.load(open('${INSTALL_DIR}/vpngate_data/state.json')).get('is_connecting', False))" 2>/dev/null || echo "False")
-        CUR_MSG=$(python3 -c "import json; print(json.load(open('${INSTALL_DIR}/vpngate_data/state.json')).get('last_check_message', ''))" 2>/dev/null || echo "")
-        
-        if [ "$IS_CONN" = "False" ] || [ "$IS_CONN" = "false" ]; then
-            if [ -n "$ACTIVE_ID" ]; then
-                echo -e "  -> ${GREEN}[已就绪]${PLAIN} 首次节点连接成功，活动节点: ${GREEN}$ACTIVE_ID${PLAIN}"
-                break
-            else
-                if [ -n "$CUR_MSG" ] && [ "$CUR_MSG" != "$LAST_MSG" ]; then
-                    echo -e "  -> 提示: ${YELLOW}${CUR_MSG}${PLAIN}"
-                    LAST_MSG="$CUR_MSG"
-                fi
-            fi
-        else
-            if [ -n "$CUR_MSG" ] && [ "$CUR_MSG" != "$LAST_MSG" ]; then
-                echo -e "  -> 状态: ${YELLOW}${CUR_MSG}${PLAIN}"
-                LAST_MSG="$CUR_MSG"
-            fi
-        fi
-    else
-        echo -n "."
-    fi
-    sleep 1
+# 8. Start each instance
+echo -e "\n正在启动 AimiliVPN 多实例服务..."
+for CC in "${CC_LIST[@]}"; do
+    CC="${CC,,}"
+    [ -f "/etc/aimilivpn/${CC}.env" ] || continue
+    systemctl restart "aimilivpn@${CC}.service" || true
+    echo -e "  -> ${GREEN}aimilivpn@${CC}.service${PLAIN} 已发送启动指令"
 done
-if [ -z "$ACTIVE_ID" ]; then
-    echo -e "  -> ${YELLOW}[加载超时]${PLAIN} 首次节点获取或连接超时，将在后台继续尝试..."
-fi
 
+echo -e "\n${YELLOW}首次抓取节点 + 建立加密通道通常需要 30-90 秒，启动状态可用 'ml status' 查看${PLAIN}"
+
+# Read auth back from the first instance's data dir for the summary
 SECRET_PATH="EJsW2EeBo9lY"
 USERNAME="未配置"
 PASSWORD="未配置"
-UI_PORT=8787
-AUTH_FILE="${INSTALL_DIR}/vpngate_data/ui_auth.json"
-if [ -f "$AUTH_FILE" ]; then
-    SECRET_PATH=$(python3 -c "import json; print(json.load(open('$AUTH_FILE')).get('secret_path', 'EJsW2EeBo9lY'))" 2>/dev/null || echo "EJsW2EeBo9lY")
-    USERNAME=$(python3 -c "import json; print(json.load(open('$AUTH_FILE')).get('username', '未配置'))" 2>/dev/null || echo "未配置")
-    PASSWORD=$(python3 -c "import json; print(json.load(open('$AUTH_FILE')).get('password', '未配置'))" 2>/dev/null || echo "未配置")
-    UI_PORT=$(python3 -c "import json; print(json.load(open('$AUTH_FILE')).get('port', 8787))" 2>/dev/null || echo "8787")
+if [ -f "$FIRST_AUTH_FILE" ]; then
+    SECRET_PATH=$(python3 -c "import json; print(json.load(open('$FIRST_AUTH_FILE')).get('secret_path', 'EJsW2EeBo9lY'))" 2>/dev/null || echo "EJsW2EeBo9lY")
+    USERNAME=$(python3 -c "import json; print(json.load(open('$FIRST_AUTH_FILE')).get('username', '未配置'))" 2>/dev/null || echo "未配置")
+    PASSWORD=$(python3 -c "import json; print(json.load(open('$FIRST_AUTH_FILE')).get('password', '未配置'))" 2>/dev/null || echo "未配置")
 fi
 
 # Get VPS public IP
 echo -e "正在获取 VPS 公网 IP..."
 PUBLIC_IP=$(curl -s --max-time 3 https://api.ipify.org || curl -s --max-time 3 https://ifconfig.me || curl -s --max-time 3 icanhazip.com || echo "您的服务器公网IP")
-echo -n "$PUBLIC_IP" > "${INSTALL_DIR}/vpngate_data/public_ip.txt"
+for CC in "${CC_LIST[@]}"; do
+    CC="${CC,,}"
+    [ -f "/etc/aimilivpn/${CC}.env" ] || continue
+    echo -n "$PUBLIC_IP" > "${INSTALL_DIR}/data/${CC}/public_ip.txt"
+done
 
 echo -e "\n${GREEN}==========================================================${PLAIN}"
-echo -e "${GREEN}             AimiliVPN 源码一键部署已完成！${PLAIN}"
+echo -e "${GREEN}             AimiliVPN 多国家部署已完成！${PLAIN}"
 echo -e "${GREEN}==========================================================${PLAIN}"
-echo -e "  * 网页控制面板:  ${BLUE}http://${PUBLIC_IP}:${UI_PORT}/${SECRET_PATH}/${PLAIN}"
-echo -e "  * 网页管理账号:  ${YELLOW}${USERNAME}${PLAIN}"
-echo -e "  * 网页管理密码:  ${YELLOW}${PASSWORD}${PLAIN}"
-echo -e "  * HTTP/SOCKS5 代理端口:  ${BLUE}http://127.0.0.1:7928/${PLAIN}"
+for CC in "${CC_LIST[@]}"; do
+    CC_UP="${CC^^}"
+    CC_LO="${CC,,}"
+    [ -f "/etc/aimilivpn/${CC_LO}.env" ] || continue
+    echo -e "  * [${CC_UP}] 网页面板:    ${BLUE}http://${PUBLIC_IP}:${UI_PORT_MAP[$CC_UP]}/${SECRET_PATH}/${PLAIN}"
+    echo -e "  * [${CC_UP}] 出口代理:    ${BLUE}socks5://127.0.0.1:${PROXY_PORT_MAP[$CC_UP]}${PLAIN}"
+done
 echo -e " --------------------------------------------------------"
-echo -e "  * 快速状态指令:   ${YELLOW}ml status${PLAIN}  或  ${YELLOW}ml${PLAIN}"
-echo -e "  * 查看实时日志:   ${YELLOW}ml logs${PLAIN}"
-echo -e "  * 停止服务:       ${YELLOW}ml stop${PLAIN}"
-echo -e "  * 重启服务:       ${YELLOW}ml restart${PLAIN}"
+echo -e "  * 共用登录账号:  ${YELLOW}${USERNAME}${PLAIN}"
+echo -e "  * 共用登录密码:  ${YELLOW}${PASSWORD}${PLAIN}"
+echo -e " --------------------------------------------------------"
+echo -e "  * 查看实例状态:  ${YELLOW}ml status${PLAIN}  (聚合视图)"
+echo -e "  * 单实例操作:    ${YELLOW}ml jp restart${PLAIN} / ${YELLOW}ml us logs${PLAIN} / ${YELLOW}ml kr stop${PLAIN}"
 echo -e "=========================================================="
 echo
