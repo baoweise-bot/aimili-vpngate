@@ -176,7 +176,57 @@ import tty
 import termios
 
 INSTALL_DIR = "/opt/aimilivpn"
-LOG_FILE = "/opt/aimilivpn/vpngate_data/vpngate.log"
+ENV_DIR = "/etc/aimilivpn"
+INSTANCE = ""  # set by main() once argv is parsed
+
+def discover_instances():
+    try:
+        return sorted(
+            f.removesuffix(".env")
+            for f in os.listdir(ENV_DIR)
+            if f.endswith(".env") and os.path.isfile(os.path.join(ENV_DIR, f))
+        )
+    except FileNotFoundError:
+        return []
+
+def load_instance_env(cc):
+    env_file = os.path.join(ENV_DIR, f"{cc}.env")
+    env = {}
+    try:
+        with open(env_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                env[k.strip()] = v.strip()
+    except OSError:
+        return None
+    return env
+
+def instance_data_dir(cc):
+    env = load_instance_env(cc) or {}
+    return env.get("VPNGATE_DATA_DIR") or os.path.join(INSTALL_DIR, "data", cc)
+
+def instance_log_file(cc):
+    return os.path.join(instance_data_dir(cc), "vpngate.log")
+
+def instance_service(cc):
+    return f"aimilivpn@{cc}.service"
+
+def instance_proxy_port(cc):
+    env = load_instance_env(cc) or {}
+    try:
+        return int(env.get("LOCAL_PROXY_PORT") or 7928)
+    except ValueError:
+        return 7928
+
+def instance_ui_port(cc):
+    env = load_instance_env(cc) or {}
+    try:
+        return int(env.get("UI_PORT") or 8787)
+    except ValueError:
+        return 8787
 
 def generate_random_password():
     import random
@@ -194,8 +244,8 @@ def generate_random_suffix():
 
 def load_ui_cfg():
     import json
-    path = "/opt/aimilivpn/vpngate_data/ui_auth.json"
-    cfg = {"host": "0.0.0.0", "port": 8787, "secret_path": "EJsW2EeBo9lY", "password": ""}
+    path = os.path.join(instance_data_dir(INSTANCE), "ui_auth.json")
+    cfg = {"host": "0.0.0.0", "port": instance_ui_port(INSTANCE), "secret_path": "EJsW2EeBo9lY", "password": ""}
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -208,7 +258,7 @@ def load_ui_cfg():
 
 def save_ui_cfg(cfg):
     import json
-    path = "/opt/aimilivpn/vpngate_data/ui_auth.json"
+    path = os.path.join(instance_data_dir(INSTANCE), "ui_auth.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     try:
         with open(path, "w", encoding="utf-8") as f:
@@ -219,7 +269,7 @@ def save_ui_cfg(cfg):
 
 def load_state():
     import json
-    path = "/opt/aimilivpn/vpngate_data/state.json"
+    path = os.path.join(instance_data_dir(INSTANCE), "state.json")
     state = {"active_openvpn_node_id": "", "last_check_message": "", "is_connecting": False}
     if os.path.exists(path):
         try:
@@ -233,7 +283,7 @@ def load_state():
 
 def get_active_node_info():
     import json
-    path = "/opt/aimilivpn/vpngate_data/nodes.json"
+    path = os.path.join(instance_data_dir(INSTANCE), "nodes.json")
     state = load_state()
     active_id = state.get("active_openvpn_node_id")
     if not active_id:
@@ -273,7 +323,7 @@ def ping_ip(ip):
         return "无法连接"
 
 def get_public_ip():
-    path = "/opt/aimilivpn/vpngate_data/public_ip.txt"
+    path = os.path.join(instance_data_dir(INSTANCE), "public_ip.txt")
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -309,35 +359,52 @@ def check_port_listening(port):
     except Exception:
         return False
 
-def get_service_pid(service_name="aimilivpn.service"):
+def get_service_pid(cc=None):
+    cc = cc or INSTANCE
+    if not cc:
+        return None
+    expect = f"VPNGATE_DATA_DIR={instance_data_dir(cc)}"
     try:
         for pid_dir in os.listdir('/proc'):
-            if pid_dir.isdigit():
-                try:
-                    with open(os.path.join('/proc', pid_dir, 'cmdline'), 'r') as f:
-                        cmd = f.read()
-                        if 'vpngate_manager.py' in cmd:
-                            return pid_dir
-                except Exception:
+            if not pid_dir.isdigit():
+                continue
+            try:
+                with open(os.path.join('/proc', pid_dir, 'cmdline'), 'r') as f:
+                    cmd = f.read()
+                if 'vpngate_manager.py' not in cmd:
                     continue
+                with open(os.path.join('/proc', pid_dir, 'environ'), 'r') as f:
+                    env = f.read()
+                if expect in env:
+                    return pid_dir
+            except Exception:
+                continue
     except Exception:
         pass
     return None
 
-def check_service_active(service_name="aimilivpn.service"):
-    return get_service_pid(service_name) is not None
+def check_service_active(cc=None):
+    return get_service_pid(cc) is not None
 
-def check_openvpn_process():
+def check_openvpn_process(cc=None):
+    cc = cc or INSTANCE
+    env = load_instance_env(cc) or {}
+    tun = env.get("TUN_DEV", "")
     try:
         for pid_dir in os.listdir('/proc'):
-            if pid_dir.isdigit():
-                try:
-                    with open(os.path.join('/proc', pid_dir, 'cmdline'), 'r') as f:
-                        cmd = f.read().split('\x00')[0]
-                        if 'openvpn' in cmd:
-                            return True
-                except Exception:
+            if not pid_dir.isdigit():
+                continue
+            try:
+                with open(os.path.join('/proc', pid_dir, 'cmdline'), 'r') as f:
+                    cmd = f.read()
+                if 'openvpn' not in cmd:
                     continue
+                if tun and tun in cmd:
+                    return True
+                if not tun:
+                    return True
+            except Exception:
+                continue
     except Exception:
         pass
     return False
@@ -365,42 +432,43 @@ def print_line(text=""):
 
 def print_status():
     cfg = load_ui_cfg()
-    ui_port = cfg.get("port", 8787)
+    ui_port = instance_ui_port(INSTANCE)
+    proxy_port = instance_proxy_port(INSTANCE)
     secret_path = cfg.get("secret_path", "EJsW2EeBo9lY")
     state = load_state()
     is_connecting = state.get("is_connecting", False)
-    
-    gateway_ok = check_port_listening(7928)
-    service_ok = check_service_active("aimilivpn.service")
-    openvpn_ok = check_openvpn_process()
-    pid = get_service_pid("aimilivpn.service")
-    
+
+    gateway_ok = check_port_listening(proxy_port)
+    service_ok = check_service_active(INSTANCE)
+    openvpn_ok = check_openvpn_process(INSTANCE)
+    pid = get_service_pid(INSTANCE)
+
     active_ip, active_loc = get_active_node_info()
     latency = state.get("active_node_latency", "测试中...") if active_ip else "无活动连接"
-    
+
     green = "\033[1;32m"
     red = "\033[1;31m"
     reset = "\033[0m"
     bold = "\033[1m"
     yellow = "\033[1;33m"
-    
+
     backend_status = f"{green}[已激活] (PID: {pid}){reset}" if (service_ok and pid) else f"{red}[未启动]{reset}"
-    
+
     if is_connecting:
         gateway_status = f"{yellow}[切换中...]{reset}"
         openvpn_status = f"{yellow}[{state.get('active_node_latency') or '连接中'}...]{reset}"
     else:
         gateway_status = f"{green}[已激活]{reset}" if gateway_ok else f"{red}[未启动]{reset}"
         openvpn_status = f"{green}[已连接]{reset}" if openvpn_ok else f"{red}[未连接]{reset}"
-    
+
     print_line("=======================================================")
-    print_line(f"               {bold}AimiliVPN 管理终端 v2.0{reset}                  ")
+    print_line(f"        {bold}AimiliVPN 管理终端 [实例: {INSTANCE.upper()}]{reset}")
     print_line("=======================================================")
     print_line("【核心服务状态】")
-    print_line(format_line("代理网关 (Port 7928)", gateway_status))
+    print_line(format_line(f"代理网关 (Port {proxy_port})", gateway_status))
     print_line(format_line(f"管理后台 (Port {ui_port})", backend_status))
     print_line(format_line("连接核心 (OpenVPN)", openvpn_status))
-    
+
     login_ip = "127.0.0.1" if cfg.get("host") == "127.0.0.1" else get_public_ip()
     print_line(format_line("网页登录地址", f"{yellow}http://{login_ip}:{ui_port}/{secret_path}/{reset}"))
     print_line(format_line("网页管理账号", cfg.get("username", "未配置")))
@@ -416,7 +484,7 @@ def print_status():
         proxy_ip = state.get("proxy_ip", "-")
         proxy_latency = state.get("proxy_latency_ms", 0)
         proxy_ok = state.get("proxy_ok", False)
-        
+
         print_line(format_line("节点 IP (入口)", active_ip))
         print_line(format_line("节点地区", active_loc))
         print_line(format_line("节点延迟 (直连测试)", latency))
@@ -429,37 +497,38 @@ def print_status():
         print_line(format_line("节点状态", "无活动连接"))
     print_line()
     print_line("【使用方法】")
-    print_line(f"  export http_proxy=socks5://127.0.0.1:7928")
-    print_line(f"  export https_proxy=socks5://127.0.0.1:7928")
+    print_line(f"  export http_proxy=socks5://127.0.0.1:{proxy_port}")
+    print_line(f"  export https_proxy=socks5://127.0.0.1:{proxy_port}")
     print_line("=======================================================")
 
 def start_service():
-    print("正在启动 AimiliVPN 服务...", flush=True)
-    subprocess.run(["systemctl", "start", "aimilivpn.service"])
+    print(f"正在启动 AimiliVPN[{INSTANCE.upper()}] 服务...", flush=True)
+    subprocess.run(["systemctl", "start", instance_service(INSTANCE)])
     print("已发送启动指令。")
     time.sleep(1)
 
 def stop_service():
-    print("正在停止 AimiliVPN 服务...", flush=True)
-    subprocess.run(["systemctl", "stop", "aimilivpn.service"])
+    print(f"正在停止 AimiliVPN[{INSTANCE.upper()}] 服务...", flush=True)
+    subprocess.run(["systemctl", "stop", instance_service(INSTANCE)])
     print("已发送停止指令。")
     time.sleep(1)
 
 def restart_service():
-    print("正在重启 AimiliVPN 服务...", flush=True)
-    subprocess.run(["systemctl", "restart", "aimilivpn.service"])
+    print(f"正在重启 AimiliVPN[{INSTANCE.upper()}] 服务...", flush=True)
+    subprocess.run(["systemctl", "restart", instance_service(INSTANCE)])
     print("已发送重启指令。")
     time.sleep(1)
 
 def show_logs():
-    print("正在查看 AimiliVPN 日志 (按 Ctrl+C 退出)...", flush=True)
-    if os.path.exists(LOG_FILE):
+    log_file = instance_log_file(INSTANCE)
+    print(f"正在查看 AimiliVPN[{INSTANCE.upper()}] 日志 (按 Ctrl+C 退出)...", flush=True)
+    if os.path.exists(log_file):
         try:
-            subprocess.run(["tail", "-f", "-n", "50", LOG_FILE])
+            subprocess.run(["tail", "-f", "-n", "50", log_file])
         except KeyboardInterrupt:
             pass
     else:
-        print(f"日志文件不存在: {LOG_FILE}")
+        print(f"日志文件不存在: {log_file}")
         time.sleep(2)
 
 def update_service():
@@ -520,15 +589,21 @@ def update_service():
         time.sleep(2)
 
 def uninstall_service():
-    confirm = input("确定要完全卸载 AimiliVPN 吗？(y/N): ")
+    confirm = input("确定要完全卸载 AimiliVPN（所有国家实例）吗？(y/N): ")
     if confirm.lower() == 'y':
         print("正在完全卸载 AimiliVPN...", flush=True)
-        subprocess.run(["systemctl", "stop", "aimilivpn.service"])
-        subprocess.run(["systemctl", "disable", "aimilivpn.service"])
+        for cc in discover_instances():
+            subprocess.run(["systemctl", "stop", instance_service(cc)])
+            subprocess.run(["systemctl", "disable", instance_service(cc)])
+        try:
+            os.unlink("/lib/systemd/system/aimilivpn@.service")
+        except Exception:
+            pass
         try:
             os.unlink("/lib/systemd/system/aimilivpn.service")
         except Exception:
             pass
+        subprocess.run(["rm", "-rf", ENV_DIR])
         try:
             os.unlink("/usr/bin/ml")
         except Exception:
@@ -543,8 +618,8 @@ def uninstall_service():
 def ask_restart():
     ans = input("配置已保存。是否立即重启服务生效？(Y/n): ").strip().lower()
     if ans in ('', 'y', 'yes'):
-        print("正在重启 AimiliVPN 服务...", flush=True)
-        subprocess.run(["systemctl", "restart", "aimilivpn.service"])
+        print(f"正在重启 AimiliVPN[{INSTANCE.upper()}] 服务...", flush=True)
+        subprocess.run(["systemctl", "restart", instance_service(INSTANCE)])
         print("服务已重启。")
         time.sleep(1.5)
 
@@ -706,7 +781,7 @@ def get_status_state():
     cfg = load_ui_cfg()
     state = load_state()
     return (
-        cfg.get("port", 8787),
+        instance_ui_port(INSTANCE),
         cfg.get("secret_path", "EJsW2EeBo9lY"),
         cfg.get("username", "未配置"),
         cfg.get("password", ""),
@@ -718,19 +793,90 @@ def get_status_state():
         state.get("proxy_ip", "-"),
         state.get("proxy_latency_ms", 0),
         state.get("proxy_ok", False),
-        check_port_listening(7928),
-        check_service_active("aimilivpn.service"),
-        check_openvpn_process(),
-        get_service_pid("aimilivpn.service")
+        check_port_listening(instance_proxy_port(INSTANCE)),
+        check_service_active(INSTANCE),
+        check_openvpn_process(INSTANCE),
+        get_service_pid(INSTANCE),
     )
 
+def print_aggregate_status():
+    green = "\033[1;32m"
+    red = "\033[1;31m"
+    yellow = "\033[1;33m"
+    bold = "\033[1m"
+    reset = "\033[0m"
+    instances = discover_instances()
+    if not instances:
+        print(f"{red}未发现任何已配置的实例 ({ENV_DIR}/*.env){reset}")
+        return
+    print_line("============================================================")
+    print_line(f"        {bold}AimiliVPN 多实例总览{reset}")
+    print_line("============================================================")
+    for cc in instances:
+        env = load_instance_env(cc) or {}
+        proxy_port = instance_proxy_port(cc)
+        ui_port = instance_ui_port(cc)
+        active = check_service_active(cc)
+        gateway = check_port_listening(proxy_port)
+        ovpn = check_openvpn_process(cc)
+        flag = f"{green}[已运行]{reset}" if active else f"{red}[未运行]{reset}"
+        gw = f"{green}OK{reset}" if gateway else f"{red}DOWN{reset}"
+        vp = f"{green}已连接{reset}" if ovpn else f"{red}未连接{reset}"
+        print_line(f"  {bold}[{cc.upper()}]{reset} 服务 {flag}  代理:{proxy_port} {gw}  OpenVPN: {vp}  UI:{ui_port}  TUN:{env.get('TUN_DEV','-')}")
+    print_line("============================================================")
+    print_line(f"{yellow}单实例详细状态: ml <jp|us|kr> status{reset}")
+    print_line(f"{yellow}单实例操作:     ml <jp|us|kr> <start|stop|restart|logs>{reset}")
+
 def main():
+    global INSTANCE
     if os.geteuid() != 0:
         print("错误: 必须以 root 权限运行此命令。")
         sys.exit(1)
-        
-    if len(sys.argv) > 1:
-        cmd = sys.argv[1].lower()
+
+    instances = discover_instances()
+    if not instances:
+        print("错误: 未发现任何已配置的实例 (/etc/aimilivpn/*.env)。请先运行 install.sh。")
+        sys.exit(1)
+
+    args = sys.argv[1:]
+    target_cc = None
+
+    # ml <cc> <cmd> ...
+    if args and args[0].lower() in instances:
+        target_cc = args[0].lower()
+        args = args[1:]
+
+    # bare `ml status` or `ml` with multiple instances → aggregate view
+    if target_cc is None and (not args or args[0].lower() == "status") and len(instances) > 1:
+        if not args:
+            # interactive aggregate dashboard
+            print("\033[?1049h\033[?25l\033[H\033[J", end="", flush=True)
+            try:
+                while True:
+                    print("\033[H", end="")
+                    print_aggregate_status()
+                    print_line("\n\033[1;33m按任意键或 Ctrl+C 退出...\033[0m")
+                    print("\033[J", end="", flush=True)
+                    key = getch_timeout(2.0)
+                    if key is not None:
+                        break
+            except KeyboardInterrupt:
+                pass
+            finally:
+                print("\033[?1049l\033[?25h", end="", flush=True)
+            sys.exit(0)
+        else:
+            print_aggregate_status()
+            sys.exit(0)
+
+    # single-instance fallback (1 instance) — implicit
+    if target_cc is None:
+        target_cc = instances[0]
+
+    INSTANCE = target_cc
+
+    if args:
+        cmd = args[0].lower()
         if cmd == "start":
             start_service()
         elif cmd == "stop":
@@ -769,7 +915,8 @@ def main():
         elif cmd == "password":
             configure_credentials()
         else:
-            print("未知命令。可用命令: start, stop, restart, status, logs, update, uninstall, web, port, password")
+            print(f"未知命令 '{cmd}'。可用命令: start, stop, restart, status, logs, update, uninstall, web, port, password")
+            print(f"用法: ml [{'|'.join(instances)}] <command>")
         sys.exit(0)
         
     options = {
