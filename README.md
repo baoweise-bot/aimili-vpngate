@@ -1,181 +1,165 @@
-# AimiliVPN 🌐
+# AimiliVPN Multi-Country Fork
 
 Bilingual: [中文](#中文) | [English](#english)
+
+> Forked from [baoweise-bot/aimili-vpngate](https://github.com/baoweise-bot/aimili-vpngate). 本 fork 在上游基础上加入 **多国家固定落地** (JP / US / KR) 并行支持：每个国家一条独立 OpenVPN 隧道、独立 tun 设备、独立策略路由表、独立代理端口和 Web UI 端口。
 
 ---
 
 ## 中文
 
-[![Telegram](https://img.shields.io/badge/TG交流群-arestemple-2CA5E0?style=flat-square&logo=telegram&logoColor=white)](https://t.me/arestemple)
-[![Forum](https://img.shields.io/badge/交流论坛-339936.xyz-orange?style=flat-square&logo=discourse&logoColor=white)](https://339936.xyz)
-[![YouTube](https://img.shields.io/badge/视频教程-YouTube-red?style=flat-square&logo=youtube&logoColor=white)](https://www.youtube.com/watch?v=s-ATfXR8BpI)
-[![Email](https://img.shields.io/badge/Bug反馈-yaohunse7@gmail.com-red?style=flat-square&logo=gmail&logoColor=white)](mailto:yaohunse7@gmail.com)
+### 与上游的区别
 
+| 维度 | 上游 baoweise-bot | 本仓库 CarminBack |
+| --- | --- | --- |
+| 出口国家 | 随机国家住宅 IP | 同时落地 **日本 / 美国 / 韩国** |
+| 隧道数 | 单实例 (tun0) | 每国一条 systemd 模板实例 |
+| 候选过滤 | 不过滤 | 按 `ALLOWED_COUNTRIES` 过滤；默认排除 `hosting/datacenter` IP |
+| 代理端口 | 7928 | JP=7928 / US=7929 / KR=7930 |
+| Web UI 端口 | 8787 | JP=8788 / US=8789 / KR=8790 |
+| CLI | `ml <command>` | `ml [cc] <command>`，裸 `ml` 是聚合视图 |
 
----
-
-**AimiliVPN** 是一个专为 Linux VPS（如 Ubuntu）设计的智能 VPN 代理网关管理器。它能够自动采集 VPNGate 开放节点，进行多线程可用性测试与延迟过滤，利用 OpenVPN 隧道与策略路由（Policy Routing）实现出站网络，并在本地提供高性能的 HTTP/SOCKS5 代理网关服务，适合用作 Xray 的落地出站代理。
-
----
-
-### 🚀 快速开始
-
-在您的 **Ubuntu** VPS 机器上，复制并运行以下一行指令即可完成自动安装部署：
+### 🚀 一键安装
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/baoweise-bot/aimili-vpngate/main/install.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/CarminBack/vpngate/main/install.sh)
 ```
 
----
+安装脚本会：
+1. 拉取代码与依赖（OpenVPN、Python、systemd）
+2. 引导一次共用的 Web UI 用户名 / 密码
+3. 部署 systemd 模板单元 `aimilivpn@.service`，并 enable 三个实例：`aimilivpn@jp`、`aimilivpn@us`、`aimilivpn@kr`
+4. 在 `/etc/aimilivpn/<cc>.env` 写入每个实例的 tun 设备、路由表、端口、`ALLOWED_COUNTRIES`、`EXCLUDE_DATACENTER` 等变量
 
-### 🛠️ 快捷命令行 (CLI)
+### 🛠️ ml CLI（多实例）
 
-安装成功后，系统会在全局注册 `ml` 快捷管理指令，直接运行 `ml` 可打开图形化交互终端，也可通过以下指令执行：
-* **`ml status`** 或 **`ml`**：查看当前运行状态（代理端口、活动 VPN 节点、直连延迟、网页后台登录地址等）。
-* **`ml start`**：启动 AimiliVPN 服务。
-* **`ml stop`**：停止 AimiliVPN 服务（并自动清理策略路由与 OpenVPN 进程）。
-* **`ml restart`**：重启服务。
-* **`ml logs`**：查看实时的 Systemd 服务运行日志。
-* **`ml web`**：切换网页绑定地址（127.0.0.1 仅本地，或 0.0.0.0 允许公网访问）与重置安全后缀。
-* **`ml port`**：修改网页管理控制台监听端口。
-* **`ml password`**：生成新的 12 位安全管理密码。
-* **`ml uninstall`**：完全卸载服务并清理相关环境。
+| 命令 | 行为 |
+| --- | --- |
+| `ml` | 三国聚合状态：每个实例的 VPN 节点、出口 IP、代理端口、UI 地址 |
+| `ml jp status` / `ml us status` / `ml kr status` | 单国详细状态 |
+| `ml jp restart` / `ml us stop` / `ml kr start` | 控制单国实例 |
+| `ml jp logs` | 查看单国 systemd 日志 |
+| `ml web` / `ml port` / `ml password` | 共用 Web UI 设置（一次写入所有实例） |
+| `ml uninstall` | 卸载模板单元、所有实例与 `/etc/aimilivpn` |
 
-#### 💡 首次安装与常见报错解决（小白必看）
+> 仅装一国时，`ml <command>` 会自动透传到那个唯一实例，无需带国家代码。
 
-##### 1. 极简系统缺少依赖（Ubuntu 18-26 / Debian 首次安装）
-如果系统是全新纯净版，可能会因为缺少 `curl` 或 `ca-certificates` 导致一键安装脚本下载失败。请在安装前执行以下命令补充依赖：
-```bash
-sudo apt-get update && sudo apt-get install -y curl ca-certificates
-```
-
-##### 2. Debian 系统兼容运行方法
-本脚本一键包默认限制在 Ubuntu 系统运行。Debian 用户如需运行，可先下载并用 `sed` 临时将系统类型限制替换为 `"ubuntu"` 后再执行安装：
-```bash
-curl -Ls https://raw.githubusercontent.com/baoweise-bot/aimili-vpngate/main/install.sh -o install.sh
-sed -i 's/"${ID:-}"/"ubuntu"/g' install.sh
-sudo bash install.sh
-```
-
-##### 3. 包管理器被占用（Apt 锁冲突报错解决）
-若一键安装提示 `Could not get lock /var/lib/dpkg/lock-frontend` 等“无法获得锁”的报错，可运行以下命令解除占用并重新安装：
-```bash
-# 1. 停止自动更新服务并终止相关进程
-sudo systemctl stop unattended-upgrades 2>/dev/null
-sudo killall apt apt-get dpkg 2>/dev/null
-
-# 2. 清理残留锁文件
-sudo rm -f /var/lib/dpkg/lock* /var/lib/apt/lists/lock /var/cache/apt/archives/lock
-
-# 3. 修复受损包并重新更新源
-sudo dpkg --configure -a
-sudo apt-get update
-```
-执行完毕后，重新运行一键安装脚本即可。
-
----
-
-### ⚙️ 系统架构
+### ⚙️ 多国并行架构
 
 ```
-   [ 3x-ui / Xray ] 
-         │ (HTTP / SOCKS5)
-         ▼
-   [ 本地代理服务器 ] (Port 7928) ──(强制绑定 SO_BINDTODEVICE)──► [ tun0 虚拟网卡 ]
-         │                                                            │
-         │ (SSH, Web UI, etc. 依然走物理路由)                           │ (策略路由表 100)
-         ▼                                                            ▼
-   [ 物理网卡 eth0 ] ◄───────────────────────────────────────── [ OpenVPN 加密隧道 ]
-         │                                                            │
-         ▼ (真实服务器 IP 出站)                                         ▼ (VPNGate 落地节点出站)
-    (国内直连流量)                                               (解锁流媒体、锁区网站)
+              ┌────────────── Xray / 3x-ui (上游) ──────────────┐
+              │                                                  │
+              ▼ 7928 (JP)         ▼ 7929 (US)         ▼ 7930 (KR)
+   ┌────────────────────┐  ┌────────────────────┐  ┌────────────────────┐
+   │ aimilivpn@jp       │  │ aimilivpn@us       │  │ aimilivpn@kr       │
+   │ tun10 / table 110  │  │ tun11 / table 111  │  │ tun12 / table 112  │
+   │ UI :8788           │  │ UI :8789           │  │ UI :8790           │
+   │ ALLOWED=JP         │  │ ALLOWED=US         │  │ ALLOWED=KR         │
+   └─────────┬──────────┘  └─────────┬──────────┘  └─────────┬──────────┘
+             │                        │                        │
+             ▼ OpenVPN                ▼ OpenVPN                ▼ OpenVPN
+   [VPNGate JP 住宅节点]  [VPNGate US 住宅节点]  [VPNGate KR 住宅节点]
 ```
+
+每个实例独立选节点、独立切换、独立健康检查；某一国挂掉不会影响其它国。
+
+### 🔧 关键环境变量（写在 `/etc/aimilivpn/<cc>.env`）
+
+| 变量 | 示例 | 含义 |
+| --- | --- | --- |
+| `INSTANCE_ID` | `jp` | 实例标识 |
+| `TUN_DEV` | `tun10` | OpenVPN 虚拟网卡 |
+| `POLICY_TABLE` | `110` | 策略路由表号 |
+| `PROXY_PORT` | `7928` | HTTP/SOCKS5 监听端口 |
+| `UI_PORT` | `8788` | Web UI 端口 |
+| `ALLOWED_COUNTRIES` | `JP` | 候选节点国家白名单（VPNGate `CountryShort`） |
+| `EXCLUDE_DATACENTER` | `1` | 1=排除 hosting/datacenter，0=允许（节点稀少时可放宽） |
+| `VPNGATE_DATA_DIR` | `/opt/aimilivpn/data/jp` | 每实例独立缓存与状态目录 |
+
+> 韩国 (KR) 候选偏少。如某实例长时间找不到节点，把 `/etc/aimilivpn/kr.env` 的 `EXCLUDE_DATACENTER` 改为 `0`，再 `ml kr restart`。
+
+### 🛡️ 防泄漏（继承上游）
+
+- 所有出站 socket 通过 `SO_BINDTODEVICE` 强制绑定到对应 `TUN_DEV`，VPN 断线即 502，不会回落物理 IP。
+- 策略路由仅作用于 tun 接口流量，SSH / Web UI / 系统流量仍走物理网卡。
 
 ---
 
 ## English
 
-[![Telegram](https://img.shields.io/badge/Telegram-arestemple-2CA5E0?style=flat-square&logo=telegram&logoColor=white)](https://t.me/arestemple)
-[![Forum](https://img.shields.io/badge/Forum-339936.xyz-orange?style=flat-square&logo=discourse&logoColor=white)](https://339936.xyz)
-[![Email](https://img.shields.io/badge/Bug%20Report-yaohunse7@gmail.com-red?style=flat-square&logo=gmail&logoColor=white)](mailto:yaohunse7@gmail.com)
+### Differences vs upstream
+
+| Aspect | Upstream baoweise-bot | This fork (CarminBack) |
+| --- | --- | --- |
+| Exit country | random residential | concurrent **JP / US / KR** |
+| Tunnels | single instance (tun0) | one systemd template instance per country |
+| Candidate filter | none | filter by `ALLOWED_COUNTRIES`; drop `hosting/datacenter` by default |
+| Proxy port | 7928 | JP=7928 / US=7929 / KR=7930 |
+| Web UI port | 8787 | JP=8788 / US=8789 / KR=8790 |
+| CLI | `ml <command>` | `ml [cc] <command>`; bare `ml` = aggregate view |
+
+### 🚀 Install
+
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/CarminBack/vpngate/main/install.sh)
+```
+
+The installer pulls dependencies, prompts once for the shared Web UI credentials, deploys the systemd template `aimilivpn@.service`, and enables three instances (`aimilivpn@jp`, `aimilivpn@us`, `aimilivpn@kr`). Per-instance variables live in `/etc/aimilivpn/<cc>.env`.
+
+### 🛠️ ml CLI (multi-instance)
+
+| Command | Behavior |
+| --- | --- |
+| `ml` | Aggregate dashboard for all enabled countries |
+| `ml jp status` / `ml us status` / `ml kr status` | Per-country detailed status |
+| `ml jp restart` / `ml us stop` / `ml kr start` | Control a single instance |
+| `ml jp logs` | systemd journal for one instance |
+| `ml web` / `ml port` / `ml password` | Shared Web UI settings (applied to every instance) |
+| `ml uninstall` | Tear down the template, every instance, and `/etc/aimilivpn` |
+
+> If only one country is installed, `ml <command>` falls through to that single instance — country code optional.
+
+### ⚙️ Concurrent multi-country architecture
+
+```
+              ┌────────────── Xray / 3x-ui upstream ─────────────┐
+              │                                                  │
+              ▼ 7928 (JP)         ▼ 7929 (US)         ▼ 7930 (KR)
+   ┌────────────────────┐  ┌────────────────────┐  ┌────────────────────┐
+   │ aimilivpn@jp       │  │ aimilivpn@us       │  │ aimilivpn@kr       │
+   │ tun10 / table 110  │  │ tun11 / table 111  │  │ tun12 / table 112  │
+   │ UI :8788           │  │ UI :8789           │  │ UI :8790           │
+   │ ALLOWED=JP         │  │ ALLOWED=US         │  │ ALLOWED=KR         │
+   └─────────┬──────────┘  └─────────┬──────────┘  └─────────┬──────────┘
+             │                        │                        │
+             ▼ OpenVPN                ▼ OpenVPN                ▼ OpenVPN
+   [VPNGate JP residential]  [VPNGate US residential]  [VPNGate KR residential]
+```
+
+Each instance picks, switches, and health-checks nodes independently; a failure in one country never affects the others.
+
+### 🔧 Per-instance env (`/etc/aimilivpn/<cc>.env`)
+
+| Variable | Example | Meaning |
+| --- | --- | --- |
+| `INSTANCE_ID` | `jp` | Instance identifier |
+| `TUN_DEV` | `tun10` | OpenVPN virtual interface |
+| `POLICY_TABLE` | `110` | Policy routing table id |
+| `PROXY_PORT` | `7928` | HTTP/SOCKS5 listen port |
+| `UI_PORT` | `8788` | Web UI port |
+| `ALLOWED_COUNTRIES` | `JP` | Whitelist on VPNGate `CountryShort` |
+| `EXCLUDE_DATACENTER` | `1` | 1=drop hosting/datacenter, 0=allow (relax when the pool is small) |
+| `VPNGATE_DATA_DIR` | `/opt/aimilivpn/data/jp` | Per-instance cache & state dir |
+
+> The KR pool is usually thin. If an instance can't find nodes for a long time, set `EXCLUDE_DATACENTER=0` in `/etc/aimilivpn/kr.env` and `ml kr restart`.
+
+### 🛡️ Leak protection (inherited from upstream)
+
+- All outbound sockets are `SO_BINDTODEVICE`-bound to their `TUN_DEV`. If the tunnel drops, requests return `502` instead of leaking via the physical NIC.
+- Policy routing scopes tunneled traffic only — SSH, Web UI, and system traffic stay on the physical interface.
 
 ---
 
-**AimiliVPN** is an intelligent VPN proxy gateway manager designed specifically for Linux VPS (e.g. Ubuntu). It automatically collects open VPNGate nodes, conducts multi-threaded availability testing and latency filtering, establishes secure out-of-band routing via OpenVPN and policy routing to **prevent VPS lockouts**, and hosts a high-performance local SOCKS5/HTTP proxy gateway. It is highly optimized to serve as a residential/unlocked egress node for upstream proxies like 3x-ui / Xray.
+### Credits
 
-### ✨ Key Features
-
-1. ⚡ **Auto-Collection & Multi-Threaded Probing**:
-   * Periodically fetches candidate nodes from VPNGate.
-   * Performs concurrent ping latency and handshake tests to maintain a pool of high-quality nodes.
-2. 🔒 **Anti-Lockout Routing (Policy Routing)**:
-   * Directs traffic from the virtual adapter `tun0` to a customized routing table (Table 100) without altering the system's default gateway.
-   * Keeps SSH sessions and server administration panels unaffected by the active VPN.
-3. 🚫 **Fail-Safe Leak Protection**:
-   * Outbound socket connections inside the local proxy server are strictly bound to `tun0` via `SO_BINDTODEVICE`.
-   * If the VPN disconnects, proxy requests are instantly blocked with a `502 Bad Gateway` instead of falling back to the VPS physical IP address.
-4. 🖥️ **Modern Web UI Panel**:
-   * Sleek dark/light responsive console (default port `8787`).
-   * Provides real-time geolocation, ISP, ASN, latency, and IP-type (residential/datacenter) detection.
-   * Enables manual node selection, blacklist resets, proxy speed-testing, and logs query.
-   * Secured by a random secret path suffix (e.g., `/EJsW2EeBo9lY/`) and password authentication.
-5. 🛠️ **CLI Utility (ml)**:
-   * Command-line helper tool `ml` with a menu-driven interface.
-   * Provides quick statuses, starts/stops the daemon, resets passwords, and changes bind hosts.
-
----
-
-### 🚀 Quick Start
-
-To install and deploy AimiliVPN on your **Ubuntu** server, copy and paste the following command:
-
-```bash
-bash <(curl -Ls https://raw.githubusercontent.com/baoweise-bot/aimili-vpngate/main/install.sh)
-```
-
----
-
-### 🛠️ CLI Helper Commands
-
-Once installed, use the global command `ml` to launch the interactive helper menu, or use the shortcuts below:
-* **`ml status`** or **`ml`**: Check running system status (active nodes, proxy ports, latency, URLs).
-* **`ml start`**: Start the gateway service.
-* **`ml stop`**: Stop the gateway service (and clean routing tables).
-* **`ml restart`**: Restart the service.
-* **`ml logs`**: View real-time Systemd output logs.
-* **`ml web`**: Toggle Web UI accessibility (127.0.0.1 or 0.0.0.0) and reset suffix paths.
-* **`ml port`**: Update the Web Console port.
-* **`ml password`**: Regenerate a secure 12-character administration password.
-* **`ml uninstall`**: Completely remove the service and repository files from your VPS.
-
-#### 💡 Troubleshooting & First-Time Installation Tips
-
-##### 1. Missing Dependencies on Minimal OS (Ubuntu / Debian)
-If you are using a brand new minimal OS, the installation might fail due to missing `curl` or `ca-certificates`. Run the following command to pre-install dependencies:
-```bash
-sudo apt-get update && sudo apt-get install -y curl ca-certificates
-```
-
-##### 2. Bypass OS Restrictions for Debian
-The script is restricted to Ubuntu by default. For Debian systems, run the following commands to download, patch, and install:
-```bash
-curl -Ls https://raw.githubusercontent.com/baoweise-bot/aimili-vpngate/main/install.sh -o install.sh
-sed -i 's/"${ID:-}"/"ubuntu"/g' install.sh
-sudo bash install.sh
-```
-
-##### 3. Package Manager Locked (`apt`/`dpkg` Lock Errors)
-If you see `Could not get lock /var/lib/dpkg/lock-frontend` or similar busy errors, run these commands to unlock and retry:
-```bash
-# 1. Stop automatic upgrades & kill active processes
-sudo systemctl stop unattended-upgrades 2>/dev/null
-sudo killall apt apt-get dpkg 2>/dev/null
-
-# 2. Remove lock files
-sudo rm -f /var/lib/dpkg/lock* /var/lib/apt/lists/lock /var/cache/apt/archives/lock
-
-# 3. Repair package states & update
-sudo dpkg --configure -a
-sudo apt-get update
-```
-Once done, re-run the installation script.
+Original project by [@baoweise-bot](https://github.com/baoweise-bot). Multi-country refactor maintained at [CarminBack/vpngate](https://github.com/CarminBack/vpngate).
