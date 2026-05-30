@@ -7,6 +7,8 @@ import urllib.parse
 import time
 from typing import Any
 
+_BIND_DEV: bytes = b"tun0"
+
 def parse_int(value: Any) -> int:
     try:
         return int(value)
@@ -50,7 +52,7 @@ def resolve_dns_over_tun0(host: str, dns_server: str = "8.8.8.8", timeout: float
     try:
         sock.settimeout(timeout)
         try:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"tun0")
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, _BIND_DEV)
         except OSError:
             return None
         sock.sendto(packet, (dns_server, 53))
@@ -126,7 +128,7 @@ def create_connection(address: tuple[str, int], timeout: float = 20) -> socket.s
         try:
             sock = socket.socket(af, socktype, proto)
             sock.settimeout(timeout)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, b"tun0")
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, _BIND_DEV)
             sock.connect(sa)
             return sock
         except OSError as e:
@@ -247,13 +249,15 @@ def proxy_client(client: socket.socket, address: tuple[str, int]) -> None:
         except OSError:
             pass
 
-def start_proxy_server(host: str, port: int) -> None:
+def start_proxy_server(host: str, port: int, bind_dev: str = "tun0") -> None:
+    global _BIND_DEV
+    _BIND_DEV = bind_dev.encode("utf-8")
     try:
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind((host, port))
         server.listen(256)
-        print(f"HTTP/SOCKS5 proxy listening on {host}:{port}", flush=True)
+        print(f"HTTP/SOCKS5 proxy listening on {host}:{port} (bind dev: {bind_dev})", flush=True)
     except Exception as e:
         print(f"[ERROR] Failed to start HTTP/SOCKS5 proxy on {host}:{port}: {e}", flush=True)
         return
