@@ -48,6 +48,9 @@ LOCAL_PROXY_PORT = int(os.environ.get("LOCAL_PROXY_PORT", "7928"))
 UI_HOST = os.environ.get("UI_HOST", "0.0.0.0")
 UI_PORT = int(os.environ.get("UI_PORT", "8787"))
 INVALID_BACKOFF_SECONDS = int(os.environ.get("INVALID_BACKOFF_SECONDS", str(30 * 60)))
+TUN_DEV = os.environ.get("TUN_DEV", "tun0")
+POLICY_TABLE = os.environ.get("POLICY_TABLE", "100")
+INSTANCE_ID = os.environ.get("INSTANCE_ID", "")
 
 ROOT_DIR = Path(sys.executable).resolve().parent if globals().get("__compiled__") else Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ["VPNGATE_DATA_DIR"]).resolve() if os.environ.get("VPNGATE_DATA_DIR") else ROOT_DIR / "vpngate_data"
@@ -358,7 +361,7 @@ def get_openvpn_version() -> float:
     _openvpn_version = 2.4
     return _openvpn_version
 
-def openvpn_command(config_file: str, route_nopull: bool, dev: str = "tun0") -> list[str]:
+def openvpn_command(config_file: str, route_nopull: bool, dev: str = TUN_DEV) -> list[str]:
     command = shlex.split(OPENVPN_CMD, posix=False) or ["openvpn"]
     command.extend(
         [
@@ -422,10 +425,10 @@ def kill_existing_openvpn_processes() -> None:
     if not sys.platform.startswith("linux"):
         return
     try:
-        # Terminate existing openvpn processes managing tun0 or using our vpngate configuration
-        subprocess.run(["pkill", "-f", "openvpn.*tun0"], capture_output=True, timeout=2)
-        subprocess.run(["pkill", "-f", "openvpn.*vpngate_data"], capture_output=True, timeout=2)
-        print("[Cleanup] Terminated existing AimiliVPN OpenVPN processes.", flush=True)
+        # Terminate existing openvpn processes managing our tun device or using our vpngate configuration
+        subprocess.run(["pkill", "-f", f"openvpn.*{TUN_DEV}\\b"], capture_output=True, timeout=2)
+        subprocess.run(["pkill", "-f", f"openvpn.*{DATA_DIR.name}"], capture_output=True, timeout=2)
+        print(f"[Cleanup] Terminated existing AimiliVPN OpenVPN processes for {TUN_DEV}.", flush=True)
     except Exception as e:
         print(f"[Cleanup Error] Failed to kill existing OpenVPN processes: {e}", flush=True)
 
@@ -447,7 +450,7 @@ def update_handshake_status(line_lower: str) -> None:
             set_state(active_node_latency=short_status, last_check_message=detailed_desc)
             break
 
-def run_openvpn_until_ready(config_file: str, keep_alive: bool, route_nopull: bool, timeout: int | None = None, dev: str = "tun0") -> tuple[bool, str, subprocess.Popen[str] | None]:
+def run_openvpn_until_ready(config_file: str, keep_alive: bool, route_nopull: bool, timeout: int | None = None, dev: str = TUN_DEV) -> tuple[bool, str, subprocess.Popen[str] | None]:
     limit = timeout if timeout is not None else OPENVPN_TEST_TIMEOUT_SECONDS
     try:
         process = subprocess.Popen(
@@ -522,36 +525,36 @@ def run_openvpn_until_ready(config_file: str, keep_alive: bool, route_nopull: bo
     return ok, message, process
 
 
-def setup_policy_routing(interface: str = "tun0") -> None:
+def setup_policy_routing(interface: str = TUN_DEV, table: str = POLICY_TABLE) -> None:
     try:
-        subprocess.run(["ip", "rule", "del", "table", "100"], capture_output=True, timeout=2)
+        subprocess.run(["ip", "rule", "del", "table", table], capture_output=True, timeout=2)
     except Exception:
         pass
     try:
-        subprocess.run(["ip", "route", "flush", "table", "100"], capture_output=True, timeout=2)
+        subprocess.run(["ip", "route", "flush", "table", table], capture_output=True, timeout=2)
     except Exception:
         pass
-    
+
     success = False
     for attempt in range(1, 4):
         try:
-            subprocess.run(["ip", "route", "add", "default", "dev", interface, "table", "100"], check=True, timeout=2)
-            subprocess.run(["ip", "rule", "add", "oif", interface, "table", "100"], check=True, timeout=2)
-            print(f"[policy_routing] Enabled policy routing for interface {interface} (attempt {attempt} success)", flush=True)
+            subprocess.run(["ip", "route", "add", "default", "dev", interface, "table", table], check=True, timeout=2)
+            subprocess.run(["ip", "rule", "add", "oif", interface, "table", table], check=True, timeout=2)
+            print(f"[policy_routing] Enabled policy routing for interface {interface} table {table} (attempt {attempt} success)", flush=True)
             success = True
             break
         except Exception as e:
             print(f"[policy_routing] Attempt {attempt} failed to enable policy routing: {e}", flush=True)
             time.sleep(1)
-            
+
     if not success:
         print("[policy_routing] Failed to enable policy routing after 3 attempts", flush=True)
 
-def cleanup_policy_routing() -> None:
+def cleanup_policy_routing(table: str = POLICY_TABLE) -> None:
     try:
-        subprocess.run(["ip", "rule", "del", "table", "100"], capture_output=True, timeout=2)
-        subprocess.run(["ip", "route", "flush", "table", "100"], capture_output=True, timeout=2)
-        print("[policy_routing] Cleared policy routing table 100", flush=True)
+        subprocess.run(["ip", "rule", "del", "table", table], capture_output=True, timeout=2)
+        subprocess.run(["ip", "route", "flush", "table", table], capture_output=True, timeout=2)
+        print(f"[policy_routing] Cleared policy routing table {table}", flush=True)
     except Exception:
         pass
 
@@ -867,7 +870,7 @@ def connect_node(node_id: str) -> str:
         active_openvpn_node_id = node_id
         
         set_state(active_node_latency="配置路由", last_check_message="正在配置策略路由规则与流量转发...")
-        setup_policy_routing("tun0")
+        setup_policy_routing(TUN_DEV)
         
         global last_active_ping_time, last_active_latency
         last_active_ping_time = time.time()
@@ -909,7 +912,7 @@ def connect_node(node_id: str) -> str:
             
         latency_str = f"{last_active_latency} ms" if last_active_latency > 0 else "检测超时"
         set_state(active_openvpn_node_id=node_id, is_connecting=False, last_check_message=f"Connected {node_id}", active_node_latency=latency_str)
-        log_to_json("INFO", "VPN", f"节点 {node_id} 连接成功，出口网卡 tun0 已启用")
+        log_to_json("INFO", "VPN", f"节点 {node_id} 连接成功，出口网卡 {TUN_DEV} 已启用")
         return f"Connected {node_id}"
     finally:
         with lock:
@@ -3076,12 +3079,12 @@ def check_proxy_health() -> dict[str, Any]:
             "error": f"代理服务未运行 (端口 {LOCAL_PROXY_PORT} 连接失败，原因: {e})"
         }
 
-    # 2. 检测虚拟网卡 tun0 是否存在 (Linux 下)
-    tun_path = Path("/sys/class/net/tun0")
+    # 2. 检测虚拟网卡是否存在 (Linux 下)
+    tun_path = Path(f"/sys/class/net/{TUN_DEV}")
     if sys.platform.startswith("linux") and not tun_path.exists():
         return {
             "ok": False,
-            "error": "VPN 虚拟网卡 (tun0) 未启用，请确保当前已成功连接 VPN 节点"
+            "error": f"VPN 虚拟网卡 ({TUN_DEV}) 未启用，请确保当前已成功连接 VPN 节点"
         }
 
     # 3. 使用 curl 通过本地 SOCKS5 代理接口测试 IP 与实际延迟
