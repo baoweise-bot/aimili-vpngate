@@ -331,6 +331,25 @@ def save_ip_cache(cache: dict[str, dict[str, Any]]) -> None:
         except Exception:
             pass
 
+def get_scamalytics_score(ip: str) -> int | None:
+    url = f"https://scamalytics.com/ip/{ip}"
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            html = response.read().decode("utf-8", errors="replace")
+            m = re.search(r"\"score\"\s*:\s*\"(\d+)\"", html)
+            if m:
+                return int(m.group(1))
+            m = re.search(r"Fraud Score:\s*(\d+)", html)
+            if m:
+                return int(m.group(1))
+    except Exception as e:
+        print(f"[Scamalytics] Error checking {ip}: {e}", flush=True)
+    return None
+
 def enrich_ip_info(nodes: list[dict[str, Any]]) -> None:
     # 1. Read cache thread-safely
     with ip_cache_lock:
@@ -351,6 +370,17 @@ def enrich_ip_info(nodes: list[dict[str, Any]]) -> None:
             node["location"] = cached.get("location", "")
             node["ip_type"] = cached.get("ip_type", "")
             node["quality"] = cached.get("quality", "")
+            
+            # If scamalytics_score is missing, query it and update cache
+            if "scamalytics_score" not in cached:
+                score = get_scamalytics_score(ip)
+                cached["scamalytics_score"] = score
+                with ip_cache_lock:
+                    cache_to_save = load_ip_cache()
+                    if ip in cache_to_save:
+                        cache_to_save[ip]["scamalytics_score"] = score
+                        save_ip_cache(cache_to_save)
+            node["scamalytics_score"] = cached.get("scamalytics_score")
         else:
             if ip not in ips_to_query:
                 ips_to_query.append(ip)
@@ -398,6 +428,9 @@ def enrich_ip_info(nodes: list[dict[str, Any]]) -> None:
 
                     loc = " ".join(part for part in [item.get("country"), item.get("regionName"), item.get("city")] if part)
 
+                    # Also query Scamalytics score for the new IP
+                    score = get_scamalytics_score(query_ip)
+
                     new_entries[query_ip] = {
                         "owner": item.get("org") or item.get("isp") or "",
                         "asn": item.get("as") or "",
@@ -405,6 +438,7 @@ def enrich_ip_info(nodes: list[dict[str, Any]]) -> None:
                         "location": loc,
                         "ip_type": ip_type,
                         "quality": quality,
+                        "scamalytics_score": score,
                         "cached_at": now,
                     }
         except Exception as e:
@@ -430,6 +464,7 @@ def enrich_ip_info(nodes: list[dict[str, Any]]) -> None:
             node["location"] = cached.get("location", "")
             node["ip_type"] = cached.get("ip_type", "")
             node["quality"] = cached.get("quality", "")
+            node["scamalytics_score"] = cached.get("scamalytics_score")
 
 
 def diagnose_api_failure(api_url: str = "https://www.vpngate.net/api/iphone/") -> tuple[int, str]:
@@ -464,7 +499,7 @@ def diagnose_api_failure(api_url: str = "https://www.vpngate.net/api/iphone/") -
 
     if not api_dns_ok:
         if not dns_ok:
-            return 1006, "[ERR_LOCAL_DNS_BROKEN] 本地 DNS 解析器完全失效。原因: 无法解析任何外部域名，请检查系统 DNS 配置(如 /etc/resolv.conf)及外网连接。"
+            return 1006, "[ERR_LOCAL_DNS_BROKEN] 本地 DNS 解析器完全失效。原因: 无法解析 any 外部域名，请检查系统 DNS 配置(如 /etc/resolv.conf)及外网连接。"
         else:
             return 1007, f"[ERR_API_DOMAIN_BLOCKED] 解析 API 域名 {domain} 失败。原因: 其他外部域名解析正常，确认该官方 API 域名遭 DNS 污染或本地防火墙拦截。"
 
@@ -510,7 +545,7 @@ def diagnose_api_failure(api_url: str = "https://www.vpngate.net/api/iphone/") -
         if ext_conn_ok:
             return 1008, f"[ERR_API_IP_BLOCKED_OR_DOWN] 连接 API 服务器失败。原因: 外部网络连接通畅，但无法建立到 {domain} ({api_ip}:{port}) 的连接，可能是由于官方 IP 遭 GFW/防火墙 IP 阻断封锁或官方服务器宕机。"
         else:
-            return 1009, "[ERR_VPS_OUTBOUND_BLOCKED] VPS 完全断网。原因: 任何外部测试连接均失败（IPv4 和 IPv6 均不可达），请检查 VPS 网卡和宿主机连接。"
+            return 1009, "[ERR_VPS_OUTBOUND_BLOCKED] VPS 完全断网。原因: 任何外部测试连接均失败（IPv4 和 IPv6 均不可达），请检查 VPS 网卡 and 宿主机连接。"
 
     return 1010, f"[ERR_API_TLS_INTERFERENCE] HTTPS/TLS 握手被干扰。原因: 可以建立 TCP 连接但请求超时，通常是由于防火墙通过 SNI 阻断了 TLS 握手流。"
 
@@ -621,4 +656,4 @@ def diagnose_local_obstructions(proxy_port: int = 7928, host: str = "127.0.0.1")
             except Exception:
                 pass
 
-    return None
+    return None
