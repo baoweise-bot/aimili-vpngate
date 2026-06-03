@@ -171,7 +171,11 @@ def load_ui_config() -> dict[str, Any]:
             "secret_path": "EJsW2EeBo9lY",
             "password": "",
             "host": "::",
-            "port": 8787
+            "port": 8787,
+            "routing_mode": "auto",
+            "force_country": "",
+            "connection_enabled": True,
+            "fixed_node_id": ""
         }
         updated = False
         if auth_file.exists():
@@ -179,6 +183,9 @@ def load_ui_config() -> dict[str, Any]:
                 data = json.loads(auth_file.read_text(encoding="utf-8"))
                 for key, val in data.items():
                     config[key] = val
+                for key in ["routing_mode", "force_country", "connection_enabled", "fixed_node_id"]:
+                    if key not in data:
+                        updated = True
             except Exception:
                 pass
         
@@ -292,6 +299,8 @@ def get_state() -> dict[str, Any]:
     state["proxy_port"] = ui_cfg.get("proxy_port", 7928)
     state["routing_mode"] = ui_cfg.get("routing_mode", "auto")
     state["force_country"] = ui_cfg.get("force_country", "")
+    state["connection_enabled"] = ui_cfg.get("connection_enabled", True)
+    state["fixed_node_id"] = ui_cfg.get("fixed_node_id", "")
     
     return state
 
@@ -846,7 +855,11 @@ def active_openvpn_running() -> bool:
 def sort_all_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     available_nodes = sorted(
         [n for n in nodes if n.get("probe_status") == "available" or n.get("active")],
-        key=lambda n: (parse_int(n.get("latency_ms")) or 999999, -parse_int(n.get("score")))
+        key=lambda n: (
+            0 if n.get("ip_type") in ("residential", "mobile") else 1,
+            parse_int(n.get("latency_ms")) or 999999,
+            -parse_int(n.get("score"))
+        )
     )
     untested_nodes = sorted(
         [n for n in nodes if n.get("probe_status") == "not_checked" and not n.get("active")],
@@ -1040,19 +1053,33 @@ def auto_switch_node(attempt: int = 0) -> None:
         return
         
     ui_cfg = load_ui_config()
+    connection_enabled = ui_cfg.get("connection_enabled", True)
+    if not connection_enabled:
+        print("[自动切换] 连接已禁用，不进行自动切换。", flush=True)
+        return
+
     routing_mode = ui_cfg.get("routing_mode", "auto")
     target_country = ui_cfg.get("force_country", "")
+    fixed_node_id = ui_cfg.get("fixed_node_id", "")
 
     if routing_mode == "fixed_ip":
         print("[自动切换] 当前处于固定 IP 模式，不进行自动切换。", flush=True)
-        if active_openvpn_node_id:
+        if fixed_node_id:
             if not active_openvpn_running():
-                print(f"[自动切换] 固定 IP 模式检测到连接已断开，尝试重新连接原节点: {active_openvpn_node_id}", flush=True)
+                print(f"[自动切换] 固定 IP 模式检测到连接已断开，尝试重新连接原节点: {fixed_node_id}", flush=True)
                 def reconnect_bg():
                     try:
-                        connect_node(active_openvpn_node_id)
+                        connect_node(fixed_node_id)
                     except Exception as e:
                         print(f"[自动切换] 重新连接固定节点失败: {e}", flush=True)
+                threading.Thread(target=reconnect_bg, daemon=True).start()
+            else:
+                print(f"[自动切换] 固定 IP 模式检测到代理异常，尝试重启连接原节点: {fixed_node_id}", flush=True)
+                def reconnect_bg():
+                    try:
+                        connect_node(fixed_node_id)
+                    except Exception as e:
+                        print(f"[自动切换] 重启固定节点连接失败: {e}", flush=True)
                 threading.Thread(target=reconnect_bg, daemon=True).start()
         return
 
@@ -1117,6 +1144,16 @@ def connect_node(node_id: str) -> str:
         
     try:
         log_to_json("INFO", "VPN", f"开始连接节点: {node_id}")
+        
+        ui_cfg = load_ui_config()
+        ui_cfg["connection_enabled"] = True
+        if ui_cfg.get("routing_mode") == "fixed_ip":
+            ui_cfg["fixed_node_id"] = node_id
+        auth_file = DATA_DIR / "ui_auth.json"
+        with lock:
+            DATA_DIR.mkdir(exist_ok=True, parents=True)
+            auth_file.write_text(json.dumps(ui_cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+            
         nodes = read_json(NODES_FILE, [])
         node = next((item for item in nodes if item.get("id") == node_id), None)
         if not node:
@@ -1215,16 +1252,32 @@ def maintain_valid_nodes(force: bool = False) -> str:
             with lock:
                 stop_active_openvpn()
         elif not active_openvpn_running():
-            has_active_id = False
-            with lock:
-                if active_openvpn_node_id:
-                    has_active_id = True
-                    stop_active_openvpn()
-            if has_active_id:
-                print("[维护线程] 检测到当前 OpenVPN 进程已意外退出，准备自动切换节点", flush=True)
-                is_connecting = False
-                auto_switch_node()
-                is_connecting = True
+            ui_cfg = load_ui_config()
+            connection_enabled = ui_cfg.get("connection_enabled", True)
+            routing_mode = ui_cfg.get("routing_mode", "auto")
+            fixed_node_id = ui_cfg.get("fixed_node_id", "")
+            
+            if connection_enabled:
+                if routing_mode == "fixed_ip":
+                    if fixed_node_id:
+                        print(f"[维护线程] 固定 IP 模式检测到连接未运行，尝试连接固定节点: {fixed_node_id}", flush=True)
+                        is_connecting = False
+                        try:
+                            connect_node(fixed_node_id)
+                        except Exception as e:
+                            print(f"[维护线程] 连接固定节点失败: {e}", flush=True)
+                        is_connecting = True
+                else:
+                    has_active_id = False
+                    with lock:
+                        if active_openvpn_node_id:
+                            has_active_id = True
+                            stop_active_openvpn()
+                    if has_active_id:
+                        print("[维护线程] 检测到当前 OpenVPN 进程已意外退出，准备自动切换节点", flush=True)
+                        is_connecting = False
+                        auto_switch_node()
+                        is_connecting = True
 
         try:
             set_state(is_connecting=True, last_check_message="正在拉取最新的免费 VPN 节点列表...")
@@ -1280,11 +1333,27 @@ def maintain_valid_nodes(force: bool = False) -> str:
             routing_mode = ui_cfg.get("routing_mode", "auto")
             target_country = ui_cfg.get("force_country", "")
             
-            if routing_mode == "fixed_region" and target_country:
-                to_test = [n for n in current_nodes if not n.get("active") and n.get("country") == target_country][:10]
-            else:
-                to_test = [n for n in current_nodes if not n.get("active")][:10]
+            # Load cache to filter out high-fraud-score nodes from testing candidates
+            cache = vpn_utils.load_ip_cache()
+            
+            def is_good_candidate(n: dict[str, Any]) -> bool:
+                if n.get("active"):
+                    return False
+                if routing_mode == "fixed_region" and target_country:
+                    if n.get("country") != target_country:
+                        return False
                 
+                score = n.get("scamalytics_score")
+                if score is None:
+                    ip = n.get("ip") or n.get("remote_host")
+                    if ip and ip in cache:
+                        score = cache[ip].get("scamalytics_score")
+                
+                if score is not None and score >= 10:
+                    return False
+                return True
+                
+            to_test = [n for n in current_nodes if is_good_candidate(n)][:10]
             to_test_ids = [n["id"] for n in to_test]
             
         print(f"[维护线程] 正在检测新获取列表的前 10 个节点: {to_test_ids}", flush=True)
@@ -1297,19 +1366,22 @@ def maintain_valid_nodes(force: bool = False) -> str:
             merged = read_json(NODES_FILE, [])
             if not active_openvpn_running():
                 ui_cfg = load_ui_config()
-                routing_mode = ui_cfg.get("routing_mode", "auto")
-                target_country = ui_cfg.get("force_country", "")
-                
-                if routing_mode == "fixed_ip":
-                    if active_openvpn_node_id:
-                        auto_switch_node()
-                else:
-                    available_candidates = [n for n in merged if n.get("probe_status") == "available"]
-                    if routing_mode == "fixed_region" and target_country:
-                        available_candidates = [n for n in available_candidates if n.get("country") == target_country]
+                connection_enabled = ui_cfg.get("connection_enabled", True)
+                if connection_enabled:
+                    routing_mode = ui_cfg.get("routing_mode", "auto")
+                    target_country = ui_cfg.get("force_country", "")
+                    fixed_node_id = ui_cfg.get("fixed_node_id", "")
                     
-                    if available_candidates:
-                        auto_switch_node()
+                    if routing_mode == "fixed_ip":
+                        if fixed_node_id:
+                            auto_switch_node()
+                    else:
+                        available_candidates = [n for n in merged if n.get("probe_status") == "available"]
+                        if routing_mode == "fixed_region" and target_country:
+                            available_candidates = [n for n in available_candidates if n.get("country") == target_country]
+                        
+                        if available_candidates:
+                            auto_switch_node()
 
         valid_nodes_count = len([n for n in merged if n.get("probe_status") == "available"])
         message = f"Fetched {len(candidates)} nodes. Tested first 10 nodes."
@@ -3069,7 +3141,7 @@ function render(){
               <span>物理位置: <strong>${esc(displayLocation)}</strong></span>
               <span style="margin-left: 12px;">延时: <strong>${latencyText}</strong></span>
               <span style="margin-left: 12px;">运营主体: <strong>${esc(activeNode.owner || activeNode.as_name || "-")}</strong></span>
-              <span style="margin-left: 12px;">IP 类型: <strong>${esc(translateIpType(activeNode.ip_type))}</strong></span>
+              <span style="margin-left: 12px;">IP 类型: <strong>${esc(translateIpType(activeNode.ip_type))}</strong>${activeNode.scamalytics_score !== undefined && activeNode.scamalytics_score !== null ? ` (欺诈分: <strong style="color: ${activeNode.scamalytics_score >= 10 ? 'var(--danger)' : '#34d399'}">${activeNode.scamalytics_score}</strong>)` : ''}</span>
             </div>
           </div>
         </div>
@@ -3202,7 +3274,12 @@ function render(){
         <td class="mono" style="font-size:12px; color:var(--text-secondary);">${esc(n.asn||"-")}</td>
         <td>${esc(n.owner||n.as_name||"-")}</td>
         <td>${esc(translateQuality(n.quality))}</td>
-        <td>${esc(translateIpType(n.ip_type))}</td>
+        <td>
+          ${esc(translateIpType(n.ip_type))}
+          ${n.scamalytics_score !== undefined && n.scamalytics_score !== null 
+            ? `<br><span style="font-size: 11px; color: ${n.scamalytics_score >= 10 ? 'var(--danger)' : '#34d399'}; font-weight: 600;">欺诈分: ${n.scamalytics_score}</span>` 
+            : ''}
+        </td>
         <td>
           <div class="table-actions">
             ${testBtn}
@@ -4066,13 +4143,16 @@ def background_proxy_checker() -> None:
 
                 # If we intended to have an active VPN node but proxy failed, trigger auto-switch
                 if active_openvpn_node_id:
-                    with lock:
-                        nodes = read_json(NODES_FILE, [])
-                        active_node = next((n for n in nodes if n.get("id") == active_openvpn_node_id), None)
-                        if active_node:
-                            mark_blacklisted(active_node, f"代理连通性检测失败: {error_msg}")
-                            active_node["probe_status"] = "unavailable"
-                            write_json(NODES_FILE, nodes)
+                    ui_cfg = load_ui_config()
+                    routing_mode = ui_cfg.get("routing_mode", "auto")
+                    if routing_mode != "fixed_ip":
+                        with lock:
+                            nodes = read_json(NODES_FILE, [])
+                            active_node = next((n for n in nodes if n.get("id") == active_openvpn_node_id), None)
+                            if active_node:
+                                mark_blacklisted(active_node, f"代理连通性检测失败: {error_msg}")
+                                active_node["probe_status"] = "unavailable"
+                                write_json(NODES_FILE, nodes)
                     
                     auto_switch_node()
         except Exception as e:
@@ -4214,6 +4294,9 @@ class Handler(BaseHTTPRequestHandler):
                         active_node["latency_ms"] = last_active_latency
             stripped_nodes = []
             for n in nodes:
+                score = n.get("scamalytics_score")
+                if score is not None and score >= 10 and not n.get("active"):
+                    continue
                 stripped = n.copy()
                 if "config_text" in stripped:
                     del stripped["config_text"]
@@ -4517,6 +4600,8 @@ class Handler(BaseHTTPRequestHandler):
                 ui_cfg["routing_mode"] = routing_mode
                 ui_cfg["force_country"] = force_country
                 ui_cfg.pop("enable_force_country", None)
+                if routing_mode == "fixed_ip" and active_openvpn_node_id:
+                    ui_cfg["fixed_node_id"] = active_openvpn_node_id
                 
                 auth_file = DATA_DIR / "ui_auth.json"
                 with lock:
@@ -4550,6 +4635,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
         elif effective_path == "/api/disconnect":
             try:
+                ui_cfg = load_ui_config()
+                ui_cfg["connection_enabled"] = False
+                auth_file = DATA_DIR / "ui_auth.json"
+                with lock:
+                    DATA_DIR.mkdir(exist_ok=True, parents=True)
+                    auth_file.write_text(json.dumps(ui_cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+                
                 stop_active_openvpn()
                 with lock:
                     nodes = read_json(NODES_FILE, [])
@@ -4619,6 +4711,83 @@ class Tee:
     def flush(self) -> None:
         self.stdout.flush()
         self.file.flush()
+
+def populate_missing_scamalytics_scores() -> None:
+    def worker():
+        time.sleep(5)  # Wait for initial setup
+        while True:
+            try:
+                nodes = read_json(NODES_FILE, [])
+                if not nodes:
+                    time.sleep(10)
+                    continue
+                
+                # Find nodes without a score (excluding sentinel value -1)
+                nodes_to_update = [n for n in nodes if n.get("scamalytics_score") is None]
+                if not nodes_to_update:
+                    time.sleep(10)
+                    continue
+                
+                # Prioritize: active/available first, then untested (not_checked), then unavailable
+                def get_priority(node):
+                    status = node.get("probe_status", "not_checked")
+                    if status == "available" or node.get("active"):
+                        return 0
+                    elif status == "not_checked":
+                        return 1
+                    else:
+                        return 2
+                
+                nodes_to_update.sort(key=get_priority)
+                n = nodes_to_update[0]
+                ip = n.get("ip") or n.get("remote_host")
+                if not ip:
+                    # Set sentinel so we don't query it again
+                    with lock:
+                        current_nodes = read_json(NODES_FILE, [])
+                        for cn in current_nodes:
+                            if cn.get("id") == n["id"]:
+                                cn["scamalytics_score"] = -1
+                                break
+                        write_json(NODES_FILE, current_nodes)
+                    continue
+                
+                cache = vpn_utils.load_ip_cache()
+                score = None
+                if ip in cache and "scamalytics_score" in cache[ip]:
+                    score = cache[ip]["scamalytics_score"]
+                else:
+                    score = vpn_utils.get_scamalytics_score(ip)
+                    if ip not in cache:
+                        cache[ip] = {
+                            "owner": n.get("owner", ""),
+                            "asn": n.get("asn", ""),
+                            "as_name": n.get("as_name", ""),
+                            "location": n.get("location", ""),
+                            "ip_type": n.get("ip_type", ""),
+                            "quality": n.get("quality", ""),
+                            "cached_at": time.time()
+                        }
+                    cache[ip]["scamalytics_score"] = score
+                    vpn_utils.save_ip_cache(cache)
+                    time.sleep(1.5)
+                
+                # Update NODES_FILE immediately
+                with lock:
+                    current_nodes = read_json(NODES_FILE, [])
+                    for cn in current_nodes:
+                        if cn.get("id") == n["id"]:
+                            cn["scamalytics_score"] = score
+                            break
+                    write_json(NODES_FILE, current_nodes)
+                    
+            except Exception as e:
+                print(f"[Scamalytics] Error in back-population thread: {e}", flush=True)
+                time.sleep(5)
+            
+            time.sleep(0.5)
+
+    threading.Thread(target=worker, daemon=True).start()
 
 def main() -> None:
     ensure_dirs()
@@ -4691,6 +4860,7 @@ def main() -> None:
     threading.Thread(target=collector_loop, daemon=True).start()
     threading.Thread(target=background_proxy_checker, daemon=True).start()
     threading.Thread(target=active_node_pinger, daemon=True).start()
+    populate_missing_scamalytics_scores()
     
     ui_cfg = load_ui_config()
     ui_host = ui_cfg.get("host", UI_HOST)
