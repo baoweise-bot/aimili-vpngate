@@ -4197,16 +4197,45 @@ def check_proxy_health() -> dict[str, Any]:
         if result:
             return result
             
-        diag = vpn_utils.diagnose_local_obstructions(LOCAL_PROXY_PORT, host=LOCAL_PROXY_HOST)
-        if diag:
-            return {"ok": False, "error": f"出口连接测试失败 | 本机诊断结果: {diag[1]}"}
+        # 此时外网测试失败，检测本地代理端口是否依然能连通。若仍能连通，直接抛出出口测试失败，不调用占用诊断
+        port_still_listening = False
+        test_sock = None
+        try:
+            test_sock = socket.socket(af, socket.SOCK_STREAM)
+            test_sock.settimeout(1.0)
+            connect_host = LOCAL_PROXY_HOST
+            if connect_host in ("::", "0.0.0.0", ""):
+                connect_host = "::1" if is_ipv6 else "127.0.0.1"
+            try:
+                test_sock.connect((connect_host, LOCAL_PROXY_PORT))
+                port_still_listening = True
+            except Exception:
+                if connect_host == "::1":
+                    test_sock.close()
+                    test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    test_sock.settimeout(1.0)
+                    test_sock.connect(("127.0.0.1", LOCAL_PROXY_PORT))
+                    port_still_listening = True
+        except Exception:
+            pass
+        finally:
+            if test_sock is not None:
+                try:
+                    test_sock.close()
+                except Exception:
+                    pass
+
+        if not port_still_listening:
+            diag = vpn_utils.diagnose_local_obstructions(LOCAL_PROXY_PORT, host=LOCAL_PROXY_HOST)
+            if diag:
+                return {"ok": False, "error": f"出口连接测试失败 | 本机诊断结果: {diag[1]}"}
             
         return {"ok": False, "error": "出口连接测试失败 (ip.sb 和 api.ipify.org 均无法连通，可能是节点已失效或 VPS 防火墙限制了 UDP/TCP 出站端口)"}
     except Exception as e:
         return {"ok": False, "error": f"出口连接测试异常: {e}"}
 
 def background_proxy_checker() -> None:
-    global last_checker_heartbeat
+    global last_checker_heartbeat, is_connecting
     time.sleep(30)
     while True:
         last_checker_heartbeat = time.time()
