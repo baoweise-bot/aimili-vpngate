@@ -227,7 +227,8 @@ def load_ui_config() -> dict[str, Any]:
             "connection_enabled": True,
             "fixed_node_id": "",
             "favorite_node_ids": [],
-            "fav_fail_fallback": False
+            "fav_fail_fallback": False,
+            "discovery_countries": []
         }
         updated = False
         if auth_file.exists():
@@ -235,7 +236,7 @@ def load_ui_config() -> dict[str, Any]:
                 data = json.loads(auth_file.read_text(encoding="utf-8"))
                 for key, val in data.items():
                     config[key] = val
-                for key in ["host", "port", "proxy_port", "routing_mode", "force_country", "routing_ip_type", "connection_enabled", "fixed_node_id", "favorite_node_ids", "fav_fail_fallback"]:
+                for key in ["host", "port", "proxy_port", "routing_mode", "force_country", "routing_ip_type", "connection_enabled", "fixed_node_id", "favorite_node_ids", "fav_fail_fallback", "discovery_countries"]:
                     if key not in data:
                         updated = True
             except Exception:
@@ -380,6 +381,7 @@ def get_state() -> dict[str, Any]:
     state["fixed_node_id"] = ui_cfg.get("fixed_node_id", "")
     state["favorite_node_ids"] = ui_cfg.get("favorite_node_ids", [])
     state["fav_fail_fallback"] = False
+    state["discovery_countries"] = ui_cfg.get("discovery_countries", [])
     
     return state
 
@@ -738,7 +740,7 @@ def row_to_node(row: dict[str, str], config_text: str) -> dict[str, Any]:
         "probed_at": 0,
     }
 
-def fetch_candidates() -> list[dict[str, Any]]:
+def fetch_candidates(target_countries: list[str] | None = None) -> list[dict[str, Any]]:
     blacklist = load_blacklist()
     candidates: list[dict[str, Any]] = []
     seen_ips = set()
@@ -810,14 +812,20 @@ def fetch_candidates() -> list[dict[str, Any]]:
             raise RuntimeError(diag_msg) from last_err
         else:
             raise RuntimeError(diag_msg)
-                
+
+    # 按用户选择的国家范围筛选（在拉取成功判定之后进行，避免某国当前无节点时被误判为拉取失败）
+    total_fetched = len(candidates)
+    wanted_countries = {c.strip().upper() for c in (target_countries or []) if c and c.strip()}
+    if wanted_countries:
+        candidates = [n for n in candidates if (n.get("country_short") or "").upper() in wanted_countries]
+
     set_state(
         last_fetch_at=time.time(),
         last_fetch_status="ok",
-        last_fetch_message=f"Fetched {len(candidates)} unique candidates across multiple attempts.",
+        last_fetch_message=f"Fetched {len(candidates)} unique candidates (of {total_fetched} total) across multiple attempts.",
         blacklisted_nodes=len(blacklist),
     )
-    log_to_json("INFO", "Main", f"成功获取官方 API 节点，共 {len(candidates)} 个候选节点")
+    log_to_json("INFO", "Main", f"成功获取官方 API 节点，共 {total_fetched} 个候选节点，按国家范围筛选后剩 {len(candidates)} 个")
     return candidates
 
 def cached_nodes() -> list[dict[str, Any]]:
@@ -1707,9 +1715,12 @@ def connect_node(node_id: str) -> str:
         with lock:
             is_connecting = False
 
-def maintain_valid_nodes(force: bool = False) -> str:
+def maintain_valid_nodes(force: bool = False, target_countries: list[str] | None = None) -> str:
     global active_openvpn_process, active_openvpn_node_id, is_connecting
     ensure_dirs()
+    if target_countries is None:
+        # 未显式传入时，沿用用户上次保存的国家范围偏好（供后台周期任务复用）
+        target_countries = load_ui_config().get("discovery_countries", [])
     if not maintenance_lock.acquire(blocking=False):
         msg = "节点维护任务正在运行，请稍后再试"
         set_state(last_check_message=msg)
@@ -1747,7 +1758,7 @@ def maintain_valid_nodes(force: bool = False) -> str:
 
         try:
             set_state(is_connecting=True, last_check_message="正在拉取最新的免费 VPN 节点列表...")
-            candidates = fetch_candidates()
+            candidates = fetch_candidates(target_countries=target_countries)
         except Exception as exc:
             vpn_utils.check_and_fix_dns()
             diag_msg = str(exc)
@@ -2700,6 +2711,11 @@ INDEX_HTML = r"""<!doctype html>
       gap: 16px;
       flex-wrap: wrap;
       align-items: center;
+      /* backdrop-filter 会创建新的堆叠上下文；不给 .toolbar 自身一个明确的正数层级，
+         它就会被后面同样带 backdrop-filter 的 .table-wrapper 按文档顺序盖过去，
+         导致内部下拉面板（哪怕 z-index 再大）也无法浮到表格之上 */
+      position: relative;
+      z-index: 50;
     }
 
     .toolbar select {
@@ -3016,6 +3032,89 @@ INDEX_HTML = r"""<!doctype html>
     .dropdown-content a:hover {
       background: rgba(255,255,255,0.08);
     }
+
+    /* 国家多选下拉面板：checkbox 完全自绘，避免被 .toolbar input 的通用尺寸规则撑变形 */
+    #country_filter_dropdown {
+      padding: 10px;
+    }
+    .country-check-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 13px;
+      transition: background 0.15s ease;
+    }
+    .country-check-item:hover {
+      background: rgba(255, 255, 255, 0.06);
+    }
+    /* 原生 checkbox 在不同浏览器/系统下即使 appearance:none 也可能被渲染成
+       开关(switch)等不一致的外观，因此完全隐藏原生控件，只用它承载状态与
+       可访问性/键盘操作，视觉上用旁边的 .cb-box 自绘一个纯 CSS 方块勾选框 */
+    .country-check-item .cb-native {
+      position: absolute;
+      width: 0;
+      height: 0;
+      margin: 0;
+      padding: 0;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .country-check-item .cb-box {
+      flex: 0 0 16px;
+      width: 16px;
+      height: 16px;
+      box-sizing: border-box;
+      border: 1.5px solid var(--border-color);
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.03);
+      position: relative;
+      transition: all 0.15s ease;
+    }
+    .country-check-item .cb-native:checked + .cb-box {
+      background: var(--primary);
+      border-color: var(--primary);
+    }
+    .country-check-item .cb-native:checked + .cb-box::after {
+      content: "";
+      position: absolute;
+      left: 4px;
+      top: 1px;
+      width: 4px;
+      height: 8px;
+      border: solid white;
+      border-width: 0 2px 2px 0;
+      transform: rotate(45deg);
+    }
+    .country-check-item .country-name {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .country-check-item .country-count {
+      color: var(--text-secondary);
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+    .country-filter-actions {
+      display: flex;
+      gap: 6px;
+      padding: 2px 2px 10px;
+      margin-bottom: 6px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .country-filter-actions a {
+      padding: 5px 12px;
+      font-size: 12px;
+      border-radius: 6px;
+      background: rgba(255,255,255,0.04);
+    }
+    .country-filter-actions a:hover {
+      background: rgba(255,255,255,0.1);
+    }
     
     /* Modal styles */
     .modal {
@@ -3216,9 +3315,19 @@ INDEX_HTML = r"""<!doctype html>
       <option value="testing">检测中</option>
       <option value="unavailable">失效节点</option>
     </select>
-    <select id="country_filter">
-      <option value="">所有国家</option>
-    </select>
+    <div class="dropdown" id="country_filter_wrap">
+      <button type="button" id="country_filter_btn" style="width: 180px; height: 42px; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); border-radius: 8px; padding: 0 12px; color: var(--text-primary); font-family: inherit; font-size: 14px; display: flex; align-items: center; justify-content: space-between; gap: 6px; cursor: pointer;">
+        <span id="country_filter_label" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">所有国家</span>
+        <svg xmlns="http://www.w3.org/2000/svg" style="width:12px; height:12px; flex-shrink: 0;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" /></svg>
+      </button>
+      <div id="country_filter_dropdown" class="dropdown-content" style="left: 0; right: auto; width: 260px; max-height: 340px; overflow-y: auto;">
+        <div class="country-filter-actions">
+          <a href="javascript:void(0)" onclick="event.stopPropagation(); selectAllCountries(true)">全选</a>
+          <a href="javascript:void(0)" onclick="event.stopPropagation(); selectAllCountries(false)">清空（全部国家）</a>
+        </div>
+        <div id="country_checkbox_list" style="display:flex; flex-direction:column;"></div>
+      </div>
+    </div>
     <select id="ip_type_filter">
       <option value="">所有IP类型</option>
       <option value="residential">住宅IP</option>
@@ -3263,11 +3372,12 @@ INDEX_HTML = r"""<!doctype html>
         <thead>
           <tr>
             <th style="width: 90px;">状态</th>
+            <th style="width: 100px;">延迟</th>
             <th style="width: 220px;">IP 地址 : 端口</th>
             <th>物理位置</th>
             <th>运营主体 / ISP</th>
             <th style="width: 110px;">IP 类型</th>
-            <th style="width: 180px;">操作</th>
+            <th style="width: 230px;">操作</th>
           </tr>
         </thead>
         <tbody id="rows"></tbody>
@@ -3572,6 +3682,8 @@ INDEX_HTML = r"""<!doctype html>
 </main>
 <script>
 let nodes=[], state={}, testingNodeIds = new Set();
+let selectedCountries = new Set();       // 空集合 = 不限制（所有国家）
+let selectedCountriesInitialized = false; // 首次从后端持久化偏好初始化后即不再覆盖用户当前的临时选择
 let currentPage = 1;
 const pageSize = 99999;
 let currentPageNodes = [];
@@ -3675,33 +3787,96 @@ function getLatencyClass(ms) {
   return 'latency-poor';
 }
 
+// ISO 3166-1 alpha-2 国家代码 -> emoji 国旗（Unicode 区域指示符）；非法/未知代码时优雅降级为空字符串
+function flagEmoji(countryShort) {
+  const c = String(countryShort || "").trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(c)) return "";
+  return String.fromCodePoint(0x1F1E6 + c.charCodeAt(0) - 65, 0x1F1E6 + c.charCodeAt(1) - 65);
+}
+
 function updateCountryFilter() {
-  const select = $("country_filter");
-  const selectedValue = select.value;
-  const countries = Array.from(new Set(nodes.map(n => n ? translateCountry(n.country) : "").filter(Boolean))).sort();
-  
-  const currentOptions = Array.from(select.options).map(o => o.value).filter(Boolean);
-  if (JSON.stringify(countries) === JSON.stringify(currentOptions)) {
-    return;
+  // 首次加载时，把后端持久化的国家范围偏好同步为当前选择（之后不再覆盖，避免打断用户正在做的临时筛选）
+  if (!selectedCountriesInitialized) {
+    const saved = Array.isArray(state.discovery_countries) ? state.discovery_countries : [];
+    selectedCountries = new Set(saved);
+    selectedCountriesInitialized = true;
   }
-  
-  select.innerHTML = '<option value="">所有国家</option>' + 
-    countries.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
-  
-  if (countries.includes(selectedValue)) {
-    select.value = selectedValue;
+
+  // 从当前已知节点中汇总「国家代码 -> {中文名, 数量}」，按中文名排序
+  const byCode = new Map();
+  for (const n of nodes) {
+    if (!n || !n.country_short) continue;
+    const code = String(n.country_short).toUpperCase();
+    const zh = translateCountry(n.country) || code;
+    const entry = byCode.get(code) || { zh, count: 0 };
+    entry.count++;
+    byCode.set(code, entry);
+  }
+  const entries = Array.from(byCode.entries()).sort((a, b) => a[1].zh.localeCompare(b[1].zh, "zh"));
+
+  const list = $("country_checkbox_list");
+  if (list) {
+    if (entries.length === 0) {
+      list.innerHTML = `<div style="padding:10px 8px; font-size:12px; color:var(--text-secondary);">暂无节点数据</div>`;
+    } else {
+      list.innerHTML = entries.map(([code, info]) => {
+        const checked = selectedCountries.has(code) ? "checked" : "";
+        return `<label class="country-check-item" onclick="event.stopPropagation()">
+          <input type="checkbox" class="cb-native" data-code="${esc(code)}" ${checked} onchange="toggleCountrySelected('${esc(code)}', this.checked)">
+          <span class="cb-box"></span>
+          <span class="country-name">${flagEmoji(code)} ${esc(info.zh)}</span>
+          <span class="country-count">${info.count}</span>
+        </label>`;
+      }).join("");
+    }
+  }
+
+  updateCountryFilterLabel();
+}
+
+function updateCountryFilterLabel() {
+  const label = $("country_filter_label");
+  if (!label) return;
+  if (selectedCountries.size === 0) {
+    label.textContent = "所有国家";
+  } else if (selectedCountries.size <= 2) {
+    const byCode = new Map();
+    for (const n of nodes) {
+      if (n && n.country_short) byCode.set(String(n.country_short).toUpperCase(), translateCountry(n.country));
+    }
+    label.textContent = Array.from(selectedCountries).map(c => byCode.get(c) || c).join("、");
   } else {
-    select.value = "";
+    label.textContent = `已选 ${selectedCountries.size} 个国家`;
   }
 }
 
+function toggleCountrySelected(code, checked) {
+  if (checked) selectedCountries.add(code);
+  else selectedCountries.delete(code);
+  updateCountryFilterLabel();
+  currentPage = 1;
+  render();
+}
+
+function selectAllCountries(selectAll) {
+  if (selectAll) {
+    const codes = new Set();
+    for (const n of nodes) if (n && n.country_short) codes.add(String(n.country_short).toUpperCase());
+    selectedCountries = codes;
+  } else {
+    selectedCountries = new Set();
+  }
+  updateCountryFilter();
+  currentPage = 1;
+  render();
+}
+
 function getFilteredNodes() {
-  const selectedCountry = $("country_filter").value;
   const selectedIpType = $("ip_type_filter").value;
   const selectedStatus = $("status_filter").value;
   return nodes.filter(n => {
     if (!n) return false;
-    if (selectedCountry && translateCountry(n.country) !== selectedCountry) {
+    if (selectedCountries.size > 0 && !selectedCountries.has(String(n.country_short || "").toUpperCase())) {
       return false;
     }
     if (selectedIpType) {
@@ -3775,6 +3950,7 @@ function render(){
     const latencyClass = getLatencyClass(activeNode.latency_ms);
     const latencyText = activeNode.latency_ms ? `<span class="latency-val ${latencyClass}">${activeNode.latency_ms} ms</span>` : "-";
     const displayLocation = activeNode.location || translateCountry(activeNode.country) || "-";
+    const activeFlag = flagEmoji(activeNode.country_short);
     activeCardContainer.innerHTML = `
       <div class="active-card">
         <div class="active-card-info">
@@ -3784,13 +3960,13 @@ function render(){
           <div class="active-card-details">
             <div class="active-card-title">
               <span class="badge available"><span class="badge-pulse"></span>已连接</span>
-              <strong>${esc(translateCountry(activeNode.country))} 节点</strong>
+              <strong>${activeFlag ? activeFlag + " " : ""}${esc(translateCountry(activeNode.country))} 节点</strong>
             </div>
             <div class="active-card-value mono" style="font-size: 20px; margin-top: 2px;">
               ${esc(activeNode.ip || activeNode.remote_host)}:${activeNode.remote_port || ""}
             </div>
             <div class="active-card-meta" style="margin-top: 4px;">
-              <span>物理位置: <strong>${esc(displayLocation)}</strong></span>
+              <span>物理位置: <strong>${activeFlag ? activeFlag + " " : ""}${esc(displayLocation)}</strong></span>
               <span style="margin-left: 12px;">延时: <strong>${latencyText}</strong></span>
               <span style="margin-left: 12px;">运营主体: <strong>${esc(activeNode.owner || activeNode.as_name || "-")}</strong></span>
               <span style="margin-left: 12px;">IP 类型: <strong>${esc(translateIpType(activeNode.ip_type))}</strong></span>
@@ -3896,7 +4072,7 @@ function render(){
 
   // Render table rows
   if (currentPageNodes.length === 0) {
-    $("rows").innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--text-secondary); padding: 40px 0;">未找到符合过滤条件的备选节点。</td></tr>`;
+    $("rows").innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-secondary); padding: 40px 0;">未找到符合过滤条件的备选节点。</td></tr>`;
   } else {
     $("rows").innerHTML=currentPageNodes.map(n=>{
       if (!n) return '';
@@ -3905,9 +4081,12 @@ function render(){
       
       const badgeClass = isCurrentlyActive ? 'available' : (n.probe_status || 'not_checked');
       const badgeText = isCurrentlyActive ? '<span class="badge-pulse"></span>已连接' : translateStatus(n.probe_status);
-      const latencyClass = getLatencyClass(n.latency_ms);
-      const latencyText = n.latency_ms ? `<span class="latency-val ${latencyClass}">${n.latency_ms} ms</span>` : "-";
+      const latencyClass = getLatencyClass(n.latency_ms || n.ping);
+      const latencyText = n.latency_ms
+        ? `<span class="latency-val ${latencyClass}">${n.latency_ms} ms</span>`
+        : (n.ping ? `<span class="latency-val ${latencyClass}" style="opacity:.6" title="VPNGate 官方公示数据，仅供参考，非本机实测延迟">≈${n.ping} ms</span>` : "-");
       const displayLocation = n.location || translateCountry(n.country) || "-";
+      const locationFlag = flagEmoji(n.country_short);
       
       const isTesting = testingNodeIds.has(n.id) || n.probe_status === "testing";
       const testSpinner = `<svg style="animation: spin 1s linear infinite; width: 12px; height: 12px; display: inline-block; margin-right: 4px; vertical-align: middle;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-opacity="0.2" fill="none"></circle><path d="M4 12a8 8 0 018-8" stroke="currentColor" fill="none"></path></svg>`;
@@ -3929,12 +4108,14 @@ function render(){
 
       return `<tr ${rowClass}>
         <td><span class="badge ${badgeClass}">${badgeText}</span></td>
+        <td>${latencyText}</td>
         <td class="mono" style="white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis;" title="${esc(n.ip||n.remote_host)}:${n.remote_port||""}">${esc(n.ip||n.remote_host)}:${n.remote_port||""}</td>
-        <td style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${esc(displayLocation)}">${esc(displayLocation)}</td>
+        <td style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${esc(displayLocation)}">${locationFlag ? locationFlag + " " : ""}${esc(displayLocation)}</td>
         <td style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${esc(n.owner||n.as_name||"-")}">${esc(n.owner||n.as_name||"-")}</td>
         <td style="white-space: nowrap; max-width: 110px; overflow: hidden; text-overflow: ellipsis;" title="${esc(translateIpType(n.ip_type))}">${esc(translateIpType(n.ip_type))}</td>
         <td>
           <div class="table-actions">
+            ${testBtn}
             ${favBtn}
             ${connectBtn}
           </div>
@@ -4160,14 +4341,24 @@ async function load(){
     startConnectionPolling();
   }
 }
-$("country_filter").onchange=()=>{ currentPage = 1; render(); };
 $("ip_type_filter").onchange=()=>{ currentPage = 1; render(); };
 $("status_filter").onchange=()=>{ currentPage = 1; render(); };
+
+const countryFilterBtn = $("country_filter_btn");
+const countryFilterDropdown = $("country_filter_dropdown");
+if (countryFilterBtn && countryFilterDropdown) {
+  countryFilterBtn.onclick = (e) => {
+    e.stopPropagation();
+    const isShow = countryFilterDropdown.style.display === "block";
+    countryFilterDropdown.style.display = isShow ? "none" : "block";
+  };
+  countryFilterDropdown.onclick = (e) => { e.stopPropagation(); };
+}
 
 $("refresh").onclick=async()=>{
   refreshButtonBusy("正在启动更新...");
   try{
-    await fetch("./api/refresh_nodes",{method:"POST"});
+    await fetch("./api/refresh_nodes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({countries: Array.from(selectedCountries)})});
     await load();
     startRefreshPolling();
   }
@@ -4242,6 +4433,7 @@ if (githubBtn && githubDropdown) {
 document.addEventListener("click", () => {
   if (adminDropdown) adminDropdown.style.display = "none";
   if (githubDropdown) githubDropdown.style.display = "none";
+  if (countryFilterDropdown) countryFilterDropdown.style.display = "none";
 });
 
 let showFavoritesOnly = false;
@@ -5599,7 +5791,21 @@ class Handler(BaseHTTPRequestHandler):
                 if maintenance_lock.locked():
                     self.send_json({"ok": True, "message": "节点维护任务正在运行，请稍后再试", "running": True})
                 else:
-                    threading.Thread(target=maintain_valid_nodes, args=(False,), daemon=True).start()
+                    try:
+                        payload = self.read_json_body()
+                    except Exception:
+                        payload = {}
+                    raw_countries = payload.get("countries")
+                    countries: list[str] | None = None
+                    if isinstance(raw_countries, list):
+                        countries = [str(c).strip().upper() for c in raw_countries if str(c).strip()]
+                        ui_cfg = load_ui_config()
+                        ui_cfg["discovery_countries"] = countries
+                        auth_file = DATA_DIR / "ui_auth.json"
+                        with lock:
+                            DATA_DIR.mkdir(exist_ok=True, parents=True)
+                            write_json(auth_file, ui_cfg)
+                    threading.Thread(target=maintain_valid_nodes, args=(False, countries), daemon=True).start()
                     self.send_json({"ok": True, "message": "已在后台启动节点更新流程", "running": False})
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
