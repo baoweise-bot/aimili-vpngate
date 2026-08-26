@@ -223,6 +223,21 @@ def generate_random_username() -> str:
             if has_lower and has_upper and has_digit:
                 return uname
 
+def normalize_discovery_countries(value: Any) -> list[str]:
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        code = str(item or "").strip().upper()
+        if not re.fullmatch(r"[A-Z]{2}", code) or code in seen:
+            continue
+        normalized.append(code)
+        seen.add(code)
+        if len(normalized) >= 250:
+            break
+    return normalized
+
 def load_ui_config() -> dict[str, Any]:
     with lock:
         auth_file = DATA_DIR / "ui_auth.json"
@@ -239,7 +254,8 @@ def load_ui_config() -> dict[str, Any]:
             "connection_enabled": True,
             "fixed_node_id": "",
             "favorite_node_ids": [],
-            "fav_fail_fallback": False
+            "fav_fail_fallback": False,
+            "discovery_countries": [],
         }
         updated = False
         if auth_file.exists():
@@ -247,7 +263,7 @@ def load_ui_config() -> dict[str, Any]:
                 data = json.loads(auth_file.read_text(encoding="utf-8"))
                 for key, val in data.items():
                     config[key] = val
-                for key in ["host", "port", "proxy_port", "routing_mode", "force_country", "routing_ip_type", "connection_enabled", "fixed_node_id", "favorite_node_ids", "fav_fail_fallback"]:
+                for key in ["host", "port", "proxy_port", "routing_mode", "force_country", "routing_ip_type", "connection_enabled", "fixed_node_id", "favorite_node_ids", "fav_fail_fallback", "discovery_countries"]:
                     if key not in data:
                         updated = True
             except Exception:
@@ -275,6 +291,11 @@ def load_ui_config() -> dict[str, Any]:
         if normalized_proxy_port != config.get("proxy_port"):
             config["proxy_port"] = normalized_proxy_port
             updated = True
+
+        normalized_discovery_countries = normalize_discovery_countries(config.get("discovery_countries"))
+        if normalized_discovery_countries != config.get("discovery_countries"):
+            config["discovery_countries"] = normalized_discovery_countries
+            updated = True
             
         if not auth_file.exists() or updated:
             try:
@@ -284,6 +305,18 @@ def load_ui_config() -> dict[str, Any]:
                 pass
                 
         return config
+
+def persist_discovery_countries(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError("国家筛选范围必须是国家代码列表")
+    countries = normalize_discovery_countries(value)
+    ui_cfg = load_ui_config()
+    ui_cfg["discovery_countries"] = countries
+    auth_file = DATA_DIR / "ui_auth.json"
+    with lock:
+        DATA_DIR.mkdir(exist_ok=True, parents=True)
+        write_json(auth_file, ui_cfg)
+    return countries
 
 # 初始化时优先从 ui_auth.json 加载保存的代理出站端口和网页端口配置以覆盖环境变量
 try:
@@ -396,6 +429,7 @@ def get_state() -> dict[str, Any]:
     state["connection_enabled"] = ui_cfg.get("connection_enabled", True)
     state["fixed_node_id"] = ui_cfg.get("fixed_node_id", "")
     state["favorite_node_ids"] = ui_cfg.get("favorite_node_ids", [])
+    state["discovery_countries"] = normalize_discovery_countries(ui_cfg.get("discovery_countries"))
     state["fav_fail_fallback"] = False
     
     return state
@@ -851,8 +885,24 @@ def rows_to_candidates(
         seen_ips.add(ip)
     return candidates
 
+def filter_candidates_by_discovery_countries(
+    candidates: list[dict[str, Any]],
+    country_codes: Any,
+) -> list[dict[str, Any]]:
+    selected = set(normalize_discovery_countries(country_codes))
+    if not selected:
+        return candidates
+    return [
+        candidate
+        for candidate in candidates
+        if str(candidate.get("country_short") or "").strip().upper() in selected
+    ]
+
 def fetch_candidates() -> list[dict[str, Any]]:
     blacklist = load_blacklist()
+    discovery_countries = normalize_discovery_countries(
+        load_ui_config().get("discovery_countries")
+    )
     last_err: Exception | None = None
 
     log_to_json("INFO", "Main", "开始按官方、GitHub Pages、本地缓存顺序拉取节点列表...")
@@ -873,15 +923,31 @@ def fetch_candidates() -> list[dict[str, Any]]:
             if url.startswith("https://"):
                 cache_api_snapshot(api_text, source_name)
 
+            filtered_candidates = filter_candidates_by_discovery_countries(
+                candidates,
+                discovery_countries,
+            )
+            scope_message = (
+                f"按国家范围 {', '.join(discovery_countries)} 筛选后保留 {len(filtered_candidates)} 个"
+                if discovery_countries
+                else f"保留全部 {len(filtered_candidates)} 个"
+            )
+
             set_state(
                 last_fetch_at=time.time(),
                 last_fetch_status="ok",
                 last_fetch_source=source_name,
-                last_fetch_message=f"从 {source_name} 获取 {len(candidates)} 个候选节点。",
+                last_fetch_message=(
+                    f"从 {source_name} 成功获取 {len(candidates)} 个候选节点，{scope_message}。"
+                ),
                 blacklisted_nodes=len(blacklist),
             )
-            log_to_json("INFO", "Main", f"节点源 {source_name} 获取成功，共 {len(candidates)} 个候选节点")
-            return candidates
+            log_to_json(
+                "INFO",
+                "Main",
+                f"节点源 {source_name} 获取成功，共 {len(candidates)} 个候选节点，{scope_message}",
+            )
+            return filtered_candidates
         except Exception as e:
             last_err = e
             print(f"[fetch_candidates] 节点源 {source_name} 失败: {e}", flush=True)
@@ -901,15 +967,31 @@ def fetch_candidates() -> list[dict[str, Any]]:
                 raise ValueError("本地快照没有未被屏蔽的候选节点")
             if source_name == "bundled_initial" and not API_CACHE_FILE.exists():
                 cache_api_snapshot(api_text, source_name)
+            filtered_candidates = filter_candidates_by_discovery_countries(
+                candidates,
+                discovery_countries,
+            )
+            scope_message = (
+                f"按国家范围 {', '.join(discovery_countries)} 筛选后保留 {len(filtered_candidates)} 个"
+                if discovery_countries
+                else f"保留全部 {len(filtered_candidates)} 个"
+            )
             set_state(
                 last_fetch_at=time.time(),
                 last_fetch_status="cached",
                 last_fetch_source=source_name,
-                last_fetch_message=f"网络节点源不可用，已载入 {source_name} 的 {len(candidates)} 个候选节点。",
+                last_fetch_message=(
+                    f"网络节点源不可用，已载入 {source_name} 的 {len(candidates)} 个候选节点，"
+                    f"{scope_message}。"
+                ),
                 blacklisted_nodes=len(blacklist),
             )
-            log_to_json("WARNING", "Main", f"网络节点源不可用，使用 {source_name}，共 {len(candidates)} 个候选节点")
-            return candidates
+            log_to_json(
+                "WARNING",
+                "Main",
+                f"网络节点源不可用，使用 {source_name}，共 {len(candidates)} 个候选节点，{scope_message}",
+            )
+            return filtered_candidates
         except Exception as e:
             last_err = e
             print(f"[fetch_candidates] 本地节点源 {source_name} 失败: {e}", flush=True)
@@ -3064,6 +3146,8 @@ INDEX_HTML = r"""<!doctype html>
     }
 
     .toolbar {
+      position: relative;
+      z-index: 50;
       background: var(--bg-surface);
       backdrop-filter: blur(12px);
       -webkit-backdrop-filter: blur(12px);
@@ -3098,7 +3182,7 @@ INDEX_HTML = r"""<!doctype html>
       background: #0f172a;
     }
 
-    .toolbar input {
+    .toolbar > input {
       flex: 1;
       min-width: 250px;
       height: 42px;
@@ -3112,11 +3196,176 @@ INDEX_HTML = r"""<!doctype html>
       transition: all 0.2s ease;
     }
 
-    .toolbar input:focus {
+    .toolbar > input:focus {
       outline: none;
       border-color: var(--primary);
       box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
       background: rgba(15, 23, 42, 0.8);
+    }
+
+    .country-filter {
+      position: relative;
+      width: 220px;
+      flex: 0 0 220px;
+    }
+
+    .country-filter-button {
+      width: 100%;
+      height: 42px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 0 12px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      color: var(--text-primary);
+      font: inherit;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    .country-filter-button:hover,
+    .country-filter-button[aria-expanded="true"] {
+      border-color: var(--primary);
+      background: rgba(15, 23, 42, 0.8);
+    }
+
+    .country-filter-button:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+    }
+
+    .country-filter-chevron {
+      width: 16px;
+      height: 16px;
+      flex: 0 0 16px;
+      transition: transform 0.2s ease;
+    }
+
+    .country-filter-button[aria-expanded="true"] .country-filter-chevron {
+      transform: rotate(180deg);
+    }
+
+    .country-filter-panel {
+      position: absolute;
+      top: calc(100% + 8px);
+      left: 0;
+      z-index: 1000;
+      width: min(320px, calc(100vw - 40px));
+      max-height: 360px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: rgba(15, 23, 42, 0.98);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+    }
+
+    .country-filter-panel[hidden] {
+      display: none;
+    }
+
+    .country-filter-options {
+      padding: 6px;
+      overflow-y: auto;
+    }
+
+    .country-option {
+      position: relative;
+      min-height: 40px;
+      display: grid;
+      grid-template-columns: 18px 24px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 8px;
+      border-radius: 6px;
+      color: var(--text-primary);
+      cursor: pointer;
+    }
+
+    .country-option:hover {
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .country-option-input {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      margin: 0;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .country-option-box {
+      width: 18px;
+      height: 18px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid rgba(148, 163, 184, 0.7);
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.03);
+      color: white;
+      font-size: 12px;
+      line-height: 1;
+    }
+
+    .country-option-input:checked + .country-option-box {
+      border-color: var(--primary);
+      background: var(--primary);
+    }
+
+    .country-option-input:checked + .country-option-box::after {
+      content: "✓";
+    }
+
+    .country-option-input:focus-visible + .country-option-box {
+      outline: 2px solid #a5b4fc;
+      outline-offset: 2px;
+    }
+
+    .country-option-flag {
+      font-size: 18px;
+      line-height: 1;
+      text-align: center;
+    }
+
+    .country-option-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .country-option-count {
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .country-filter-footer {
+      padding: 8px;
+      border-top: 1px solid var(--border-color);
+    }
+
+    .country-filter-clear {
+      width: 100%;
+      min-height: 36px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: #a5b4fc;
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .country-filter-clear:hover,
+    .country-filter-clear:focus-visible {
+      background: rgba(99, 102, 241, 0.12);
+      outline: none;
     }
 
     .table-wrapper {
@@ -3135,6 +3384,7 @@ INDEX_HTML = r"""<!doctype html>
 
     table {
       width: 100%;
+      min-width: 1120px;
       border-collapse: collapse;
       text-align: left;
       table-layout: fixed;
@@ -3243,6 +3493,8 @@ INDEX_HTML = r"""<!doctype html>
     .table-actions {
       display: flex;
       gap: 8px;
+      align-items: center;
+      white-space: nowrap;
     }
 
     .connect-btn {
@@ -3323,6 +3575,19 @@ INDEX_HTML = r"""<!doctype html>
       color: #fb7185;
     }
 
+    .latency-estimated {
+      background: rgba(148, 163, 184, 0.08);
+      color: var(--text-secondary);
+      border: 1px dashed rgba(148, 163, 184, 0.35);
+      font-weight: 500;
+    }
+
+    .latency-source {
+      margin-left: 4px;
+      font-size: 10px;
+      opacity: 0.8;
+    }
+
     @media (max-width: 768px) {
       header {
         flex-direction: column;
@@ -3332,12 +3597,16 @@ INDEX_HTML = r"""<!doctype html>
       .btn-group {
         width: 100%;
         margin-top: 12px;
+        gap: 8px;
+        flex-wrap: wrap;
       }
-      .btn-group button, .btn-group .btn-telegram {
-        flex: 1;
+      .btn-group > button,
+      .btn-group > .btn-telegram,
+      .btn-group > .dropdown {
+        flex: 1 1 calc(50% - 4px);
+        min-width: 0;
       }
       .btn-group .dropdown {
-        flex: 1;
         display: flex;
       }
       .btn-group .dropdown button {
@@ -3591,9 +3860,26 @@ INDEX_HTML = r"""<!doctype html>
       <option value="testing">检测中</option>
       <option value="unavailable">失效节点</option>
     </select>
-    <select id="country_filter">
-      <option value="">所有国家</option>
-    </select>
+    <div class="country-filter" id="country_filter">
+      <button
+        id="country_filter_button"
+        class="country-filter-button"
+        type="button"
+        aria-expanded="false"
+        aria-controls="country_filter_panel"
+      >
+        <span id="country_filter_label">所有国家</span>
+        <svg class="country-filter-chevron" aria-hidden="true" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+      <div id="country_filter_panel" class="country-filter-panel" role="group" aria-label="国家筛选" hidden>
+        <div id="country_filter_options" class="country-filter-options"></div>
+        <div class="country-filter-footer">
+          <button class="country-filter-clear" type="button" onclick="clearDiscoveryCountries(event)">清空选择</button>
+        </div>
+      </div>
+    </div>
     <select id="ip_type_filter">
       <option value="">所有IP类型</option>
       <option value="residential">住宅IP</option>
@@ -3639,10 +3925,11 @@ INDEX_HTML = r"""<!doctype html>
           <tr>
             <th style="width: 90px;">状态</th>
             <th style="width: 220px;">IP 地址 : 端口</th>
+            <th style="width: 125px;">延迟</th>
             <th>物理位置</th>
             <th>运营主体 / ISP</th>
             <th style="width: 110px;">IP 类型</th>
-            <th style="width: 180px;">操作</th>
+            <th style="width: 230px;">操作</th>
           </tr>
         </thead>
         <tbody id="rows"></tbody>
@@ -3950,6 +4237,10 @@ let nodes=[], state={}, testingNodeIds = new Set();
 let currentPage = 1;
 const pageSize = 99999;
 let currentPageNodes = [];
+let selectedDiscoveryCountries = new Set();
+let discoveryCountriesInitialized = false;
+let discoveryCountriesDirty = false;
+let countryFilterSignature = "";
 
 const $=id=>document.getElementById(id);
 const esc=s=>String(s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
@@ -4050,33 +4341,133 @@ function getLatencyClass(ms) {
   return 'latency-poor';
 }
 
+function countryFlag(countryShort) {
+  const code = String(countryShort || "").trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code)) return "";
+  return Array.from(code)
+    .map(char => String.fromCodePoint(char.charCodeAt(0) + 127397))
+    .join("");
+}
+
+function nodeLatencyHtml(node) {
+  const measured = Number(node && node.latency_ms) || 0;
+  if (measured > 0) {
+    return `<span class="latency-val ${getLatencyClass(measured)}" title="本机实测延迟">${measured} ms</span>`;
+  }
+  const estimated = Number(node && node.ping) || 0;
+  if (estimated > 0) {
+    return `<span class="latency-val latency-estimated" title="VPNGate 官方公示值，仅供参考、非本机实测">~${estimated} ms<span class="latency-source">预估</span></span>`;
+  }
+  return "-";
+}
+
+function syncDiscoveryCountriesFromState() {
+  if (discoveryCountriesInitialized && discoveryCountriesDirty) return;
+  const saved = Array.isArray(state.discovery_countries) ? state.discovery_countries : [];
+  selectedDiscoveryCountries = new Set(
+    saved
+      .map(code => String(code || "").trim().toUpperCase())
+      .filter(code => /^[A-Z]{2}$/.test(code))
+  );
+  discoveryCountriesInitialized = true;
+}
+
+function updateCountryFilterLabel() {
+  const label = $("country_filter_label");
+  if (!label) return;
+  const count = selectedDiscoveryCountries.size;
+  label.textContent = count ? `已选 ${count} 个国家` : "所有国家";
+}
+
 function updateCountryFilter() {
-  const select = $("country_filter");
-  const selectedValue = select.value;
-  const countries = Array.from(new Set(nodes.map(n => n ? translateCountry(n.country) : "").filter(Boolean))).sort();
-  
-  const currentOptions = Array.from(select.options).map(o => o.value).filter(Boolean);
-  if (JSON.stringify(countries) === JSON.stringify(currentOptions)) {
-    return;
+  syncDiscoveryCountriesFromState();
+  const countries = new Map();
+  nodes.forEach(node => {
+    if (!node) return;
+    const code = String(node.country_short || "").trim().toUpperCase();
+    if (!/^[A-Z]{2}$/.test(code)) return;
+    const current = countries.get(code) || {
+      code,
+      name: translateCountry(node.country) || code,
+      count: 0,
+    };
+    current.count += 1;
+    countries.set(code, current);
+  });
+  selectedDiscoveryCountries.forEach(code => {
+    if (!countries.has(code)) {
+      countries.set(code, { code, name: code, count: 0 });
+    }
+  });
+  const options = Array.from(countries.values()).sort((a, b) =>
+    a.name.localeCompare(b.name, "zh-CN") || a.code.localeCompare(b.code)
+  );
+  const signature = JSON.stringify(options);
+  if (signature !== countryFilterSignature) {
+    const container = $("country_filter_options");
+    container.innerHTML = options.length
+      ? options.map(item => `
+          <label class="country-option">
+            <input
+              class="country-option-input"
+              type="checkbox"
+              value="${esc(item.code)}"
+              ${selectedDiscoveryCountries.has(item.code) ? "checked" : ""}
+              onchange="toggleDiscoveryCountry(this)"
+            >
+            <span class="country-option-box" aria-hidden="true"></span>
+            <span class="country-option-flag" aria-hidden="true">${esc(countryFlag(item.code))}</span>
+            <span class="country-option-name">${esc(item.name)}</span>
+            <span class="country-option-count">${item.count}</span>
+          </label>
+        `).join("")
+      : '<div style="padding:12px; color:var(--text-secondary); font-size:13px;">暂无国家数据</div>';
+    countryFilterSignature = signature;
   }
-  
-  select.innerHTML = '<option value="">所有国家</option>' + 
-    countries.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
-  
-  if (countries.includes(selectedValue)) {
-    select.value = selectedValue;
-  } else {
-    select.value = "";
-  }
+  document.querySelectorAll(".country-option-input").forEach(input => {
+    input.checked = selectedDiscoveryCountries.has(input.value);
+  });
+  updateCountryFilterLabel();
+}
+
+function setCountryFilterOpen(open) {
+  const button = $("country_filter_button");
+  const panel = $("country_filter_panel");
+  if (!button || !panel) return;
+  button.setAttribute("aria-expanded", open ? "true" : "false");
+  panel.hidden = !open;
+}
+
+function toggleDiscoveryCountry(input) {
+  const code = String(input.value || "").trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code)) return;
+  if (input.checked) selectedDiscoveryCountries.add(code);
+  else selectedDiscoveryCountries.delete(code);
+  discoveryCountriesDirty = true;
+  currentPage = 1;
+  updateCountryFilterLabel();
+  render();
+}
+
+function clearDiscoveryCountries(event) {
+  if (event) event.stopPropagation();
+  selectedDiscoveryCountries.clear();
+  discoveryCountriesDirty = true;
+  document.querySelectorAll(".country-option-input").forEach(input => {
+    input.checked = false;
+  });
+  currentPage = 1;
+  updateCountryFilterLabel();
+  render();
 }
 
 function getFilteredNodes() {
-  const selectedCountry = $("country_filter").value;
   const selectedIpType = $("ip_type_filter").value;
   const selectedStatus = $("status_filter").value;
   return nodes.filter(n => {
     if (!n) return false;
-    if (selectedCountry && translateCountry(n.country) !== selectedCountry) {
+    const countryCode = String(n.country_short || "").trim().toUpperCase();
+    if (selectedDiscoveryCountries.size && !selectedDiscoveryCountries.has(countryCode)) {
       return false;
     }
     if (selectedIpType) {
@@ -4147,9 +4538,9 @@ function render(){
       </div>
     `;
   } else if (activeNode) {
-    const latencyClass = getLatencyClass(activeNode.latency_ms);
-    const latencyText = activeNode.latency_ms ? `<span class="latency-val ${latencyClass}">${activeNode.latency_ms} ms</span>` : "-";
+    const latencyText = nodeLatencyHtml(activeNode);
     const displayLocation = activeNode.location || translateCountry(activeNode.country) || "-";
+    const activeFlag = countryFlag(activeNode.country_short);
     activeCardContainer.innerHTML = `
       <div class="active-card">
         <div class="active-card-info">
@@ -4165,7 +4556,7 @@ function render(){
               ${esc(activeNode.ip || activeNode.remote_host)}:${activeNode.remote_port || ""}
             </div>
             <div class="active-card-meta" style="margin-top: 4px;">
-              <span>物理位置: <strong>${esc(displayLocation)}</strong></span>
+              <span>物理位置: <strong>${activeFlag ? `${esc(activeFlag)} ` : ""}${esc(displayLocation)}</strong></span>
               <span style="margin-left: 12px;">延时: <strong>${latencyText}</strong></span>
               <span style="margin-left: 12px;">运营主体: <strong>${esc(activeNode.owner || activeNode.as_name || "-")}</strong></span>
               <span style="margin-left: 12px;">IP 类型: <strong>${esc(translateIpType(activeNode.ip_type))}</strong></span>
@@ -4271,7 +4662,7 @@ function render(){
 
   // Render table rows
   if (currentPageNodes.length === 0) {
-    $("rows").innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--text-secondary); padding: 40px 0;">未找到符合过滤条件的备选节点。</td></tr>`;
+    $("rows").innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-secondary); padding: 40px 0;">未找到符合过滤条件的备选节点。</td></tr>`;
   } else {
     $("rows").innerHTML=currentPageNodes.map(n=>{
       if (!n) return '';
@@ -4281,9 +4672,9 @@ function render(){
       
       const badgeClass = isCurrentlyActive ? 'available' : (isPending ? 'testing' : (n.probe_status || 'not_checked'));
       const badgeText = isCurrentlyActive ? '<span class="badge-pulse"></span>已连接' : (isPending ? '<span class="badge-pulse"></span>切换中' : translateStatus(n.probe_status));
-      const latencyClass = getLatencyClass(n.latency_ms);
-      const latencyText = n.latency_ms ? `<span class="latency-val ${latencyClass}">${n.latency_ms} ms</span>` : "-";
+      const latencyText = nodeLatencyHtml(n);
       const displayLocation = n.location || translateCountry(n.country) || "-";
+      const flag = countryFlag(n.country_short);
       
       const isTesting = testingNodeIds.has(n.id) || n.probe_status === "testing";
       const testSpinner = `<svg style="animation: spin 1s linear infinite; width: 12px; height: 12px; display: inline-block; margin-right: 4px; vertical-align: middle;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-opacity="0.2" fill="none"></circle><path d="M4 12a8 8 0 018-8" stroke="currentColor" fill="none"></path></svg>`;
@@ -4306,11 +4697,13 @@ function render(){
       return `<tr ${rowClass}>
         <td><span class="badge ${badgeClass}">${badgeText}</span></td>
         <td class="mono" style="white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis;" title="${esc(n.ip||n.remote_host)}:${n.remote_port||""}">${esc(n.ip||n.remote_host)}:${n.remote_port||""}</td>
-        <td style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${esc(displayLocation)}">${esc(displayLocation)}</td>
+        <td style="white-space: nowrap;">${latencyText}</td>
+        <td style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${esc(displayLocation)}">${flag ? `<span aria-hidden="true">${esc(flag)}</span> ` : ""}${esc(displayLocation)}</td>
         <td style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${esc(n.owner||n.as_name||"-")}">${esc(n.owner||n.as_name||"-")}</td>
         <td style="white-space: nowrap; max-width: 110px; overflow: hidden; text-overflow: ellipsis;" title="${esc(translateIpType(n.ip_type))}">${esc(translateIpType(n.ip_type))}</td>
         <td>
           <div class="table-actions">
+            ${testBtn}
             ${favBtn}
             ${connectBtn}
           </div>
@@ -4540,19 +4933,47 @@ async function load(){
     startConnectionPolling();
   }
 }
-$("country_filter").onchange=()=>{ currentPage = 1; render(); };
+$("country_filter_button").onclick = event => {
+  event.stopPropagation();
+  const isOpen = $("country_filter_button").getAttribute("aria-expanded") === "true";
+  setCountryFilterOpen(!isOpen);
+};
+$("country_filter_panel").onclick = event => event.stopPropagation();
+document.addEventListener("click", () => setCountryFilterOpen(false));
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape") {
+    const wasOpen = $("country_filter_button").getAttribute("aria-expanded") === "true";
+    setCountryFilterOpen(false);
+    if (wasOpen) $("country_filter_button").focus();
+  }
+});
 $("ip_type_filter").onchange=()=>{ currentPage = 1; render(); };
 $("status_filter").onchange=()=>{ currentPage = 1; render(); };
 
 $("refresh").onclick=async()=>{
   refreshButtonBusy("正在启动更新...");
   try{
-    await fetch("./api/refresh_nodes",{method:"POST"});
+    const response = await fetch("./api/refresh_nodes",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        discovery_countries: Array.from(selectedDiscoveryCountries).sort()
+      })
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || "节点更新启动失败");
+    }
+    state.discovery_countries = Array.isArray(result.discovery_countries)
+      ? result.discovery_countries
+      : Array.from(selectedDiscoveryCountries);
+    discoveryCountriesDirty = false;
     await load();
     startRefreshPolling();
   }
   catch(e){
     refreshButtonIdle();
+    alert("更新节点失败: " + (e.message || "未知错误"));
   }
 };
 $("btn_test_proxy").onclick = async () => {
@@ -6006,11 +6427,32 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
         elif effective_path == "/api/refresh_nodes":
             try:
+                payload = self.read_json_body()
+                if "discovery_countries" in payload:
+                    discovery_countries = persist_discovery_countries(
+                        payload.get("discovery_countries")
+                    )
+                else:
+                    discovery_countries = normalize_discovery_countries(
+                        load_ui_config().get("discovery_countries")
+                    )
                 if maintenance_lock.locked():
-                    self.send_json({"ok": True, "message": "节点维护任务正在运行，请稍后再试", "running": True})
+                    self.send_json({
+                        "ok": True,
+                        "message": "节点维护任务正在运行，国家范围已保存并将在下一轮生效",
+                        "running": True,
+                        "discovery_countries": discovery_countries,
+                    })
                 else:
                     threading.Thread(target=maintain_valid_nodes, args=(False,), daemon=True).start()
-                    self.send_json({"ok": True, "message": "已在后台启动节点更新流程", "running": False})
+                    self.send_json({
+                        "ok": True,
+                        "message": "已在后台启动节点更新流程",
+                        "running": False,
+                        "discovery_countries": discovery_countries,
+                    })
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
         elif effective_path == "/api/test_nodes":

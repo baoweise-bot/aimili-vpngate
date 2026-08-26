@@ -43,23 +43,31 @@ class FakeProcess:
         self.running = False
 
 
+def valid_snapshot_rows(rows: list[tuple[str, str, str]]) -> str:
+    csv_rows = [
+        "#HostName,IP,Score,Ping,Speed,CountryLong,CountryShort,NumVpnSessions,OpenVPN_ConfigData_Base64"
+    ]
+    for index, (ip, country_long, country_short) in enumerate(rows):
+        config_text = (
+            "client\n"
+            "dev tun\n"
+            "proto udp\n"
+            f"remote {ip} 1194 udp\n"
+            "resolv-retry infinite\n"
+            "nobind\n"
+            "<ca>\nCA\n</ca>\n"
+            "<cert>\nCERT\n</cert>\n"
+            "<key>\nKEY\n</key>\n"
+        )
+        config = base64.b64encode(config_text.encode("utf-8")).decode("ascii")
+        csv_rows.append(
+            f"vpn{index}.example,{ip},100,20,1000,{country_long},{country_short},1,{config}"
+        )
+    return "\n".join(csv_rows) + "\n"
+
+
 def valid_snapshot(ip: str = "198.51.100.10") -> str:
-    config_text = (
-        "client\n"
-        "dev tun\n"
-        "proto udp\n"
-        f"remote {ip} 1194 udp\n"
-        "resolv-retry infinite\n"
-        "nobind\n"
-        "<ca>\nCA\n</ca>\n"
-        "<cert>\nCERT\n</cert>\n"
-        "<key>\nKEY\n</key>\n"
-    )
-    config = base64.b64encode(config_text.encode("utf-8")).decode("ascii")
-    return (
-        "#HostName,IP,Score,Ping,Speed,CountryLong,CountryShort,NumVpnSessions,OpenVPN_ConfigData_Base64\n"
-        f"vpn.example,{ip},100,20,1000,Japan,JP,1,{config}\n"
-    )
+    return valid_snapshot_rows([(ip, "Japan", "JP")])
 
 
 class ManagerLogicTests(unittest.TestCase):
@@ -326,6 +334,64 @@ class ManagerLogicTests(unittest.TestCase):
             [mock.call(manager.API_HTTPS_URL, True), mock.call(manager.API_HTTP_URL, True)],
             fetch_mock.call_args_list,
         )
+
+    def test_discovery_countries_are_normalized_and_persisted(self) -> None:
+        countries = manager.persist_discovery_countries(["jp", "US", "JP", "bad", ""])
+
+        self.assertEqual(["JP", "US"], countries)
+        self.assertEqual(["JP", "US"], manager.load_ui_config()["discovery_countries"])
+        self.assertEqual(["JP", "US"], manager.get_state()["discovery_countries"])
+
+    def test_fetch_filters_country_after_source_is_accepted(self) -> None:
+        csv_text = valid_snapshot_rows(
+            [
+                ("198.51.100.60", "Japan", "JP"),
+                ("198.51.100.61", "United States", "US"),
+            ]
+        )
+        manager.persist_discovery_countries(["JP"])
+
+        with (
+            mock.patch.object(manager, "fetch_api_text", return_value=csv_text) as fetch_mock,
+            mock.patch.object(manager, "load_blacklist", return_value={}),
+            mock.patch.object(manager, "log_to_json"),
+        ):
+            nodes = manager.fetch_candidates()
+
+        self.assertEqual(["JP"], [node["country_short"] for node in nodes])
+        fetch_mock.assert_called_once_with(manager.API_HTTPS_URL, True)
+        self.assertEqual(csv_text, manager.API_CACHE_FILE.read_text(encoding="utf-8"))
+        self.assertIn("成功获取 2 个", manager.get_state()["last_fetch_message"])
+        self.assertIn("保留 1 个", manager.get_state()["last_fetch_message"])
+
+    def test_empty_country_result_does_not_fall_through_to_next_source(self) -> None:
+        csv_text = valid_snapshot_rows(
+            [
+                ("198.51.100.70", "Japan", "JP"),
+                ("198.51.100.71", "United States", "US"),
+            ]
+        )
+        manager.persist_discovery_countries(["DE"])
+
+        with (
+            mock.patch.object(manager, "fetch_api_text", return_value=csv_text) as fetch_mock,
+            mock.patch.object(manager, "load_blacklist", return_value={}),
+            mock.patch.object(manager, "log_to_json"),
+        ):
+            nodes = manager.fetch_candidates()
+
+        self.assertEqual([], nodes)
+        fetch_mock.assert_called_once_with(manager.API_HTTPS_URL, True)
+        state = manager.get_state()
+        self.assertEqual("ok", state["last_fetch_status"])
+        self.assertEqual("official_https", state["last_fetch_source"])
+        self.assertIn("保留 0 个", state["last_fetch_message"])
+
+    def test_node_table_contains_latency_country_panel_and_test_action(self) -> None:
+        self.assertIn('<th style="width: 125px;">延迟</th>', manager.INDEX_HTML)
+        self.assertIn('colspan="7"', manager.INDEX_HTML)
+        self.assertIn('class="country-option-input"', manager.INDEX_HTML)
+        self.assertIn('${testBtn}', manager.INDEX_HTML)
 
     def test_fetch_uses_github_mirror_after_official_sources(self) -> None:
         csv_text = valid_snapshot()
