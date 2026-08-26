@@ -489,6 +489,9 @@ class ManagerLogicTests(unittest.TestCase):
         self.assertNotIn("管理终端 v2.0", install_text)
         self.assertIn("5-90 秒", install_text)
         self.assertIn('new_pwd = input("请输入新管理密码 (不能为空): ")', install_text)
+        self.assertIn('state["active_openvpn_node_id"] = ""', install_text)
+        self.assertIn("ip link show dev tun0", install_text)
+        self.assertIn("pidof openvpn", install_text)
 
     def test_release_workflow_uses_full_patch_version(self) -> None:
         workflow_text = (manager.ROOT_DIR / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
