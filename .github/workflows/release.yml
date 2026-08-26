@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing formal tag to publish, for example v2.1.0
+        description: Existing formal tag to publish, for example v2.1.1
         required: true
-        default: v2.1.0
+        default: v2.1.1
         type: string
 
 concurrency:
@@ -146,7 +146,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          title="AimiliVPN V$(cut -d. -f1,2 VERSION) 正式版"
+          title="AimiliVPN V$(tr -d '\r\n' < VERSION) 正式版"
           if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             gh release upload "${RELEASE_TAG}" dist/* --clobber --repo "${GITHUB_REPOSITORY}"
             gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --title "${title}" --notes-file RELEASE_NOTES.md
