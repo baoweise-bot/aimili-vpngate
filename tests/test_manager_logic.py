@@ -394,6 +394,33 @@ class ManagerLogicTests(unittest.TestCase):
         self.assertIn('class="country-option-input"', manager.INDEX_HTML)
         self.assertIn('${testBtn}', manager.INDEX_HTML)
 
+    def test_web_dashboard_has_browser_freeze_safeguards(self) -> None:
+        self.assertNotIn("backdrop-filter", manager.LOGIN_HTML)
+        self.assertNotIn("backdrop-filter", manager.INDEX_HTML)
+        self.assertNotIn("background-attachment: fixed", manager.INDEX_HTML)
+        self.assertIn("@media (prefers-reduced-motion: reduce)", manager.LOGIN_HTML)
+        self.assertIn("@media (prefers-reduced-motion: reduce)", manager.INDEX_HTML)
+        self.assertIn("const pageSize = 50;", manager.INDEX_HTML)
+        self.assertIn("const MAX_RENDERED_LOG_LINES = 300;", manager.INDEX_HTML)
+        self.assertIn("nodesRequestPromise", manager.INDEX_HTML)
+        self.assertIn("backgroundPollInFlight", manager.INDEX_HTML)
+        self.assertIn('typeof document.hidden !== "boolean" || !document.hidden', manager.INDEX_HTML)
+        self.assertEqual(500, manager.WEB_LOG_MAX_ENTRIES)
+
+    def test_web_log_reader_only_returns_recent_valid_entries(self) -> None:
+        log_file = manager.DATA_DIR / "logs" / "current.json"
+        log_file.parent.mkdir(parents=True)
+        with log_file.open("w", encoding="utf-8") as f:
+            for index in range(520):
+                f.write(json.dumps({"index": index}) + "\n")
+            f.write("not-json\n")
+
+        entries = manager.read_recent_log_entries(log_file)
+
+        self.assertEqual(500, len(entries))
+        self.assertEqual(20, entries[0]["index"])
+        self.assertEqual(519, entries[-1]["index"])
+
     def test_web_update_controls_only_expose_stable_main_channel(self) -> None:
         self.assertEqual("2.1.0", manager.APP_VERSION)
         self.assertEqual("V2.1 正式版", manager.APP_VERSION_LABEL)

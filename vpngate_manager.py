@@ -16,6 +16,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from collections import deque
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -150,6 +151,7 @@ BLACKLIST_FILE = DATA_DIR / "blacklist.json"
 API_CACHE_FILE = DATA_DIR / "api_snapshot.csv"
 API_CACHE_META_FILE = DATA_DIR / "api_snapshot.meta.json"
 BUNDLED_SNAPSHOT_FILE = ROOT_DIR / "mirror" / "vpngate.csv"
+WEB_LOG_MAX_ENTRIES = 500
 
 lock = threading.RLock()
 maintenance_lock = threading.Lock()
@@ -384,6 +386,23 @@ def cleanup_old_logs(logs_dir: Path) -> None:
                             path.unlink()
     except Exception as e:
         print(f"[清理错误] 清理旧日志失败: {e}", flush=True)
+
+def read_recent_log_entries(log_file: Path, limit: int = WEB_LOG_MAX_ENTRIES) -> list[dict[str, Any]]:
+    if limit <= 0 or not log_file.exists():
+        return []
+    entries: deque[dict[str, Any]] = deque(maxlen=limit)
+    with open(log_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(entry, dict):
+                entries.append(entry)
+    return list(entries)
 
 def log_to_json(level: str, module: str, message: str) -> None:
     try:
@@ -2484,7 +2503,7 @@ LOGIN_HTML = r"""<!DOCTYPE html>
   <style>
     :root {
       --bg-dark: #090d16;
-      --bg-surface: rgba(15, 23, 42, 0.45);
+      --bg-surface: rgba(15, 23, 42, 0.96);
       --border-color: rgba(255, 255, 255, 0.08);
       --text-primary: #f8fafc;
       --text-secondary: #94a3b8;
@@ -2519,8 +2538,6 @@ LOGIN_HTML = r"""<!DOCTYPE html>
 
     .login-card {
       background: var(--bg-surface);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
       border: 1px solid var(--border-color);
       border-radius: 20px;
       padding: 40px 32px;
@@ -2656,6 +2673,14 @@ LOGIN_HTML = r"""<!DOCTYPE html>
       cursor: not-allowed;
       transform: none !important;
     }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
   </style>
 </head>
 <body>
@@ -2742,7 +2767,7 @@ INDEX_HTML = r"""<!doctype html>
     
     :root {
       --bg-dark: #0b0f19;
-      --bg-surface: rgba(22, 30, 49, 0.6);
+      --bg-surface: rgba(22, 30, 49, 0.94);
       --bg-surface-hover: rgba(30, 41, 67, 0.85);
       --border-color: rgba(255, 255, 255, 0.08);
       --border-color-hover: rgba(99, 102, 241, 0.35);
@@ -2769,7 +2794,6 @@ INDEX_HTML = r"""<!doctype html>
         radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
         radial-gradient(at 100% 0%, rgba(16, 185, 129, 0.08) 0px, transparent 50%),
         radial-gradient(at 50% 100%, rgba(79, 70, 229, 0.05) 0px, transparent 50%);
-      background-attachment: fixed;
       color: var(--text-primary);
       min-height: 100vh;
       -webkit-font-smoothing: antialiased;
@@ -2777,9 +2801,7 @@ INDEX_HTML = r"""<!doctype html>
 
     header {
       padding: 16px 32px;
-      background: rgba(11, 15, 25, 0.7);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
+      background: rgba(11, 15, 25, 0.97);
       border-bottom: 1px solid var(--border-color);
       display: flex;
       justify-content: space-between;
@@ -2909,8 +2931,6 @@ INDEX_HTML = r"""<!doctype html>
 
     .active-card {
       background: linear-gradient(135deg, rgba(99, 102, 241, 0.12) 0%, rgba(79, 70, 229, 0.04) 100%);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
       border: 1px solid rgba(99, 102, 241, 0.25);
       border-radius: 16px;
       padding: 24px;
@@ -2975,8 +2995,6 @@ INDEX_HTML = r"""<!doctype html>
 
     .stat {
       background: var(--bg-surface);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
       border: 1px solid var(--border-color);
       border-radius: 12px;
       padding: 20px;
@@ -3208,8 +3226,6 @@ INDEX_HTML = r"""<!doctype html>
       position: relative;
       z-index: 50;
       background: var(--bg-surface);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
       border: 1px solid var(--border-color);
       border-radius: 12px;
       padding: 16px;
@@ -3429,8 +3445,6 @@ INDEX_HTML = r"""<!doctype html>
 
     .table-wrapper {
       background: var(--bg-surface);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
       border: 1px solid var(--border-color);
       border-radius: 16px;
       overflow: hidden;
@@ -3702,14 +3716,12 @@ INDEX_HTML = r"""<!doctype html>
       right: 0;
       margin-top: 6px;
       min-width: 140px;
-      background: rgba(22, 30, 49, 0.95);
+      background: rgba(22, 30, 49, 0.99);
       border: 1px solid var(--border-color);
       border-radius: 8px;
       box-shadow: 0 10px 25px rgba(0,0,0,0.5);
       z-index: 1000;
       overflow: hidden;
-      backdrop-filter: blur(10px);
-      -webkit-backdrop-filter: blur(10px);
     }
     .dropdown-content a,
     .dropdown-content button {
@@ -3797,14 +3809,12 @@ INDEX_HTML = r"""<!doctype html>
       width: 100%;
       height: 100%;
       overflow: auto;
-      background-color: rgba(9, 13, 22, 0.7);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
+      background-color: rgba(9, 13, 22, 0.92);
       align-items: center;
       justify-content: center;
     }
     .modal-content {
-      background: rgba(22, 30, 49, 0.9);
+      background: rgba(22, 30, 49, 0.99);
       border: 1px solid var(--border-color);
       border-radius: 20px;
       width: 90%;
@@ -3906,6 +3916,15 @@ INDEX_HTML = r"""<!doctype html>
       font-size: 11px;
       color: var(--text-secondary);
       line-height: 1.3;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+      }
     }
   </style>
 </head>
@@ -4027,7 +4046,7 @@ INDEX_HTML = r"""<!doctype html>
       收藏菜单
     </button>
   </section>
-  <div id="favorites_panel" style="display: none; background: rgba(22, 30, 49, 0.85); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid var(--border-color); border-radius: 16px; padding: 20px; margin-bottom: 20px; animation: modalFadeIn 0.25s ease-out;">
+  <div id="favorites_panel" style="display: none; background: rgba(22, 30, 49, 0.97); border: 1px solid var(--border-color); border-radius: 16px; padding: 20px; margin-bottom: 20px; animation: modalFadeIn 0.25s ease-out;">
     <div style="display: flex; flex-direction: column; gap: 16px;">
       <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px;">
         <div style="display: flex; flex-direction: column; gap: 4px;">
@@ -4370,7 +4389,7 @@ INDEX_HTML = r"""<!doctype html>
 <script>
 let nodes=[], state={}, testingNodeIds = new Set();
 let currentPage = 1;
-const pageSize = 99999;
+const pageSize = 50;
 let currentPageNodes = [];
 let selectedDiscoveryCountries = new Set();
 let discoveryCountriesInitialized = false;
@@ -4379,6 +4398,16 @@ let countryFilterSignature = "";
 
 const $=id=>document.getElementById(id);
 const esc=s=>String(s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
+const renderedHtmlCache = new WeakMap();
+function setHtmlIfChanged(element, html) {
+  if (!element || renderedHtmlCache.get(element) === html) return false;
+  element.innerHTML = html;
+  renderedHtmlCache.set(element, html);
+  return true;
+}
+function isPageVisible() {
+  return typeof document.hidden !== "boolean" || !document.hidden;
+}
 const base=p=>(p||"").split(/[\\/]/).pop();
 function time(ts){return ts?new Date(ts*1000).toLocaleString():"从未"}
 function speed(v){return v?`${(v*8/1000/1000).toFixed(1)} Mbps`:"-"}
@@ -4658,11 +4687,12 @@ function render(){
   
   // Render separated Active Node Card
   const activeCardContainer = $("active_node_card");
+  let activeCardHtml = "";
   if (state.is_connecting && !activeNode) {
     const busyTitle = state.maintenance_running ? "正在更新节点" : "正在连接";
     const busyLatency = state.maintenance_running ? "节点检测中" : (state.active_node_latency || "正在连接...");
     const busyMessage = state.last_check_message || (state.maintenance_running ? "正在后台拉取并检测节点，已完成的结果会实时显示在下方列表。" : "正在与 VPN 节点建立加密隧道，请稍候...");
-    activeCardContainer.innerHTML = `
+    activeCardHtml = `
       <div class="active-card" style="background: var(--bg-surface); border-color: var(--warning); box-shadow: 0 0 15px rgba(245, 158, 11, 0.15);">
         <div class="active-card-info">
           <div class="stat-icon-wrapper" style="background: rgba(245, 158, 11, 0.15); border-color: rgba(245, 158, 11, 0.3); width: 48px; height: 48px; border-radius: 12px;">
@@ -4684,7 +4714,7 @@ function render(){
     const latencyText = nodeLatencyHtml(activeNode);
     const displayLocation = activeNode.location || translateCountry(activeNode.country) || "-";
     const activeFlag = countryFlag(activeNode.country_short);
-    activeCardContainer.innerHTML = `
+    activeCardHtml = `
       <div class="active-card">
         <div class="active-card-info">
           <div class="stat-icon-wrapper" style="background: rgba(16, 185, 129, 0.15); border-color: rgba(16, 185, 129, 0.3); width: 48px; height: 48px; border-radius: 12px;">
@@ -4713,7 +4743,7 @@ function render(){
       </div>
     `;
   } else {
-    activeCardContainer.innerHTML = `
+    activeCardHtml = `
       <div class="active-card" style="background: var(--bg-surface); border-color: var(--border-color); box-shadow: none;">
         <div class="active-card-info">
           <div class="stat-icon-wrapper" style="background: rgba(244, 63, 94, 0.1); border-color: rgba(244, 63, 94, 0.2); width: 48px; height: 48px; border-radius: 12px;">
@@ -4731,6 +4761,7 @@ function render(){
       </div>
     `;
   }
+  setHtmlIfChanged(activeCardContainer, activeCardHtml);
 
   const shown = getFilteredNodes();
   
@@ -4804,10 +4835,11 @@ function render(){
   currentPageNodes = shown.slice(startIndex, endIndex);
 
   // Render table rows
+  let rowsHtml = "";
   if (currentPageNodes.length === 0) {
-    $("rows").innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-secondary); padding: 40px 0;">未找到符合过滤条件的备选节点。</td></tr>`;
+    rowsHtml = `<tr><td colspan="7" style="text-align: center; color: var(--text-secondary); padding: 40px 0;">未找到符合过滤条件的备选节点。</td></tr>`;
   } else {
-    $("rows").innerHTML=currentPageNodes.map(n=>{
+    rowsHtml = currentPageNodes.map(n=>{
       if (!n) return '';
       const isCurrentlyActive = activeNode && n.id === activeNode.id;
       const isPending = Boolean(state.is_connecting && state.pending_node_id === n.id);
@@ -4854,6 +4886,7 @@ function render(){
       </tr>`;
     }).join("");
   }
+  setHtmlIfChanged($("rows"), rowsHtml);
 
   // Render pagination controls
   $("page_start").textContent = shown.length > 0 ? startIndex + 1 : 0;
@@ -4928,6 +4961,32 @@ async function toggleFavorite(id, event) {
 
 let pollInterval = null;
 let refreshPollInterval = null;
+let refreshPollInFlight = false;
+let connectionPollInFlight = false;
+let nodesRequestPromise = null;
+
+async function fetchNodesSnapshot() {
+  if (nodesRequestPromise) return nodesRequestPromise;
+  const request = (async () => {
+    const response = await fetch("./api/nodes", { cache: "no-store" });
+    if (!response.ok) throw new Error(`节点状态请求失败 (${response.status})`);
+    return response.json();
+  })();
+  nodesRequestPromise = request;
+  try {
+    return await request;
+  } finally {
+    if (nodesRequestPromise === request) nodesRequestPromise = null;
+  }
+}
+
+function applyNodesSnapshot(data) {
+  nodes = Array.isArray(data.nodes) ? data.nodes : [];
+  state = data.state || {};
+  stableSortNodes();
+  updateCountryFilter();
+  render();
+}
 
 function refreshButtonBusy(message = "正在后台更新...") {
   const btn = $("refresh");
@@ -4947,14 +5006,11 @@ function startRefreshPolling() {
   if (refreshPollInterval) clearInterval(refreshPollInterval);
   refreshButtonBusy("正在检测节点...");
   refreshPollInterval = setInterval(async () => {
+    if (refreshPollInFlight || !isPageVisible()) return;
+    refreshPollInFlight = true;
     try {
-      const resp = await fetch("./api/nodes");
-      const data = await resp.json();
-      nodes = Array.isArray(data.nodes) ? data.nodes : [];
-      state = data.state || {};
-      stableSortNodes();
-      updateCountryFilter();
-      render();
+      const data = await fetchNodesSnapshot();
+      applyNodesSnapshot(data);
 
       if (!state.maintenance_running) {
         clearInterval(refreshPollInterval);
@@ -4965,6 +5021,8 @@ function startRefreshPolling() {
       clearInterval(refreshPollInterval);
       refreshPollInterval = null;
       refreshButtonIdle();
+    } finally {
+      refreshPollInFlight = false;
     }
   }, 1000);
 }
@@ -4972,14 +5030,11 @@ function startRefreshPolling() {
 function startConnectionPolling() {
   if (pollInterval) clearInterval(pollInterval);
   pollInterval = setInterval(async () => {
+    if (connectionPollInFlight || !isPageVisible()) return;
+    connectionPollInFlight = true;
     try {
-      const resp = await fetch("./api/nodes");
-      const data = await resp.json();
-      nodes = Array.isArray(data.nodes) ? data.nodes : [];
-      state = data.state || {};
-      stableSortNodes();
-      updateCountryFilter();
-      render();
+      const data = await fetchNodesSnapshot();
+      applyNodesSnapshot(data);
       
       if (!state.is_connecting && !state.maintenance_running) {
         clearInterval(pollInterval);
@@ -4993,6 +5048,8 @@ function startConnectionPolling() {
       clearInterval(pollInterval);
       pollInterval = null;
       load();
+    } finally {
+      connectionPollInFlight = false;
     }
   }, 1000);
 }
@@ -5061,14 +5118,8 @@ async function disconnectNode(){
 
 
 async function load(){
-  const r=await fetch("./api/nodes"); 
-  const d=await r.json(); 
-  nodes=Array.isArray(d.nodes) ? d.nodes : []; 
-  state=d.state||{}; 
-  
-  stableSortNodes();
-  updateCountryFilter();
-  render();
+  const d = await fetchNodesSnapshot();
+  applyNodesSnapshot(d);
 
   if (state.maintenance_running) {
     startRefreshPolling();
@@ -5654,23 +5705,25 @@ async function logoutAdmin() {
 }
 
 // 页面加载时自动初始化数据
-load();
+load().catch(error => console.error("初始化节点数据失败", error));
 
 // 每 10 秒在前台空闲时自动更新节点与状态，无需手动刷新页面
+let backgroundPollInFlight = false;
 setInterval(async () => {
-  if (typeof state !== "undefined" && !state.is_connecting && (!testingNodeIds || !testingNodeIds.size) && document.visibilityState === "visible") {
+  if (backgroundPollInFlight || !isPageVisible()) return;
+  if (typeof state !== "undefined" && !state.is_connecting && !state.maintenance_running && (!testingNodeIds || !testingNodeIds.size)) {
+    backgroundPollInFlight = true;
     try {
-      const r = await fetch("./api/nodes");
-      const d = await r.json();
-      nodes = d.nodes || [];
-      state = d.state || {};
-      stableSortNodes();
-      updateCountryFilter();
-      render();
-    } catch(e) {}
+      const data = await fetchNodesSnapshot();
+      applyNodesSnapshot(data);
+    } catch(e) {
+    } finally {
+      backgroundPollInFlight = false;
+    }
   }
 }, 10000);
 let gatewayPollInterval = null;
+let gatewayRequestInFlight = false;
 
 function openGatewayModal() {
   $("admin_dropdown").style.display = "none";
@@ -5689,14 +5742,19 @@ function closeGatewayModal() {
 }
 
 async function loadGatewayStatus() {
+  if (gatewayRequestInFlight || !isPageVisible() || $("gateway_modal").style.display !== "flex") return;
+  gatewayRequestInFlight = true;
   try {
-    const res = await fetch("./api/gateway_status");
+    const res = await fetch("./api/gateway_status", { cache: "no-store" });
+    if (!res.ok) throw new Error(`网关状态请求失败 (${res.status})`);
     const data = await res.json();
     if (data.ok && data.services) {
       renderGatewayServices(data.services);
     }
   } catch (e) {
     console.error("加载网关状态失败", e);
+  } finally {
+    gatewayRequestInFlight = false;
   }
 }
 
@@ -5725,11 +5783,13 @@ function renderGatewayServices(services) {
       </div>
     `;
   });
-  container.innerHTML = html;
+  setHtmlIfChanged(container, html);
 }
 
 let logsPollInterval = null;
 let rawLogsCache = [];
+let logsRequestInFlight = false;
+const MAX_RENDERED_LOG_LINES = 300;
 
 function openLogsModal() {
   $("admin_dropdown").style.display = "none";
@@ -5748,15 +5808,20 @@ function closeLogsModal() {
 }
 
 async function loadLogs() {
+  if (logsRequestInFlight || !isPageVisible() || $("logs_modal").style.display !== "flex") return;
+  logsRequestInFlight = true;
   try {
-    const res = await fetch("./api/logs");
+    const res = await fetch("./api/logs", { cache: "no-store" });
+    if (!res.ok) throw new Error(`日志请求失败 (${res.status})`);
     const data = await res.json();
-    if (data.logs) {
+    if (Array.isArray(data.logs)) {
       rawLogsCache = data.logs;
       filterAndRenderLogs();
     }
   } catch (e) {
     console.error("加载日志失败", e);
+  } finally {
+    logsRequestInFlight = false;
   }
 }
 
@@ -5775,11 +5840,11 @@ function filterAndRenderLogs() {
   }
   
   if (filtered.length === 0) {
-    term.innerHTML = `<div style="color: var(--text-secondary); text-align: center; margin-top: 150px;">暂无该类型日志。</div>`;
+    setHtmlIfChanged(term, `<div style="color: var(--text-secondary); text-align: center; margin-top: 150px;">暂无该类型日志。</div>`);
     return;
   }
   
-  const linesHtml = filtered.map(l => {
+  const linesHtml = filtered.slice(-MAX_RENDERED_LOG_LINES).map(l => {
     let color = "#a5b4fc";
     if (l.module === "Proxy") color = "#38bdf8";
     if (l.module === "VPN") color = "#34d399";
@@ -5791,9 +5856,9 @@ function filterAndRenderLogs() {
   
   const isAtBottom = term.scrollHeight - term.clientHeight <= term.scrollTop + 50;
   
-  term.innerHTML = linesHtml;
+  const changed = setHtmlIfChanged(term, linesHtml);
   
-  if (isAtBottom) {
+  if (changed && isAtBottom) {
     term.scrollTop = term.scrollHeight;
   }
 }
@@ -6337,18 +6402,11 @@ class Handler(BaseHTTPRequestHandler):
             logs_dir = DATA_DIR / "logs"
             date_str = time.strftime("%Y-%m-%d", time.localtime())
             log_file = logs_dir / f"{date_str}.json"
-            entries = []
+            entries: list[dict[str, Any]] = []
             if log_file.exists():
                 try:
                     with lock:
-                        with open(log_file, "r", encoding="utf-8") as f:
-                            for line in f:
-                                line = line.strip()
-                                if line:
-                                    try:
-                                        entries.append(json.loads(line))
-                                    except Exception:
-                                        pass
+                        entries = read_recent_log_entries(log_file)
                 except Exception as e:
                     print(f"[API Logs] Error reading log file: {e}", flush=True)
             self.send_json({"logs": entries})
