@@ -1,0 +1,10 @@
+.git
+.github
+__pycache__
+*.pyc
+vpngate_data
+dist
+build
+tests
+scratch
+_site

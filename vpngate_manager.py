@@ -119,6 +119,18 @@ UI_PORT = env_int("UI_PORT", 8787, 1, 65535)
 INVALID_BACKOFF_SECONDS = env_int("INVALID_BACKOFF_SECONDS", 30 * 60, 1)
 
 ROOT_DIR = Path(sys.executable).resolve().parent if globals().get("__compiled__") else Path(__file__).resolve().parent
+DEFAULT_APP_VERSION = "2.1.0"
+try:
+    _version_text = (ROOT_DIR / "VERSION").read_text(encoding="utf-8").strip()
+except OSError:
+    _version_text = DEFAULT_APP_VERSION
+APP_VERSION = _version_text if re.fullmatch(r"\d+\.\d+(?:\.\d+)?", _version_text) else DEFAULT_APP_VERSION
+APP_VERSION_SHORT = ".".join(APP_VERSION.split(".")[:2])
+APP_VERSION_LABEL = f"V{APP_VERSION_SHORT} 正式版"
+GITHUB_REPOSITORY = "baoweise-bot/aimili-vpngate"
+GITHUB_REPOSITORY_URL = f"https://github.com/{GITHUB_REPOSITORY}"
+GITHUB_MAIN_BRANCH_URL = f"{GITHUB_REPOSITORY_URL}/tree/main"
+GITHUB_LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/releases/latest"
 DATA_DIR = Path(os.environ["VPNGATE_DATA_DIR"]).resolve() if os.environ.get("VPNGATE_DATA_DIR") else ROOT_DIR / "vpngate_data"
 CONFIG_DIR = DATA_DIR / "configs"
 NODES_FILE = DATA_DIR / "nodes.json"
@@ -415,6 +427,8 @@ def get_state() -> dict[str, Any]:
     state.setdefault("last_check_message", "")
     state.setdefault("pending_node_id", "")
     state.setdefault("blacklisted_nodes", 0)
+    state["app_version"] = APP_VERSION
+    state["app_version_label"] = APP_VERSION_LABEL
     
     # Pre-populate settings inputs in UI
     ui_cfg = load_ui_config()
@@ -696,7 +710,7 @@ def fetch_api_text(url: str | None = None, use_ssl_verify: bool = True) -> str:
     request = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "Mozilla/5.0 vpngate-openvpn-manager/2.0",
+            "User-Agent": f"Mozilla/5.0 AimiliVPN/{APP_VERSION}",
             "Accept": "text/plain,*/*",
         },
     )
@@ -721,6 +735,37 @@ def fetch_api_text(url: str | None = None, use_ssl_verify: bool = True) -> str:
     else:
         with urllib.request.urlopen(request, timeout=API_FETCH_TIMEOUT_SECONDS) as response:
             return read_limited(response).decode("utf-8", errors="replace")
+
+def parse_release_version(value: Any) -> tuple[int, int, int]:
+    match = re.search(r"(?i)(?:^|[^a-z0-9])v?(\d+)(?:\.(\d+))?(?:\.(\d+))?", str(value or "").strip())
+    if not match:
+        raise ValueError("GitHub Release 版本号格式无效")
+    return tuple(int(part or 0) for part in match.groups())
+
+def check_latest_release() -> dict[str, Any]:
+    payload = json.loads(fetch_api_text(GITHUB_LATEST_RELEASE_API, True))
+    if not isinstance(payload, dict):
+        raise ValueError("GitHub Release API 返回格式无效")
+    if payload.get("draft") or payload.get("prerelease"):
+        raise ValueError("GitHub 最新版本不是正式版")
+
+    latest_tag = str(payload.get("tag_name") or "").strip()
+    latest_version = parse_release_version(latest_tag)
+    current_version = parse_release_version(APP_VERSION)
+    release_url = f"{GITHUB_REPOSITORY_URL}/releases/tag/{urllib.parse.quote(latest_tag, safe='')}"
+
+    return {
+        "ok": True,
+        "current_version": APP_VERSION,
+        "current_version_label": APP_VERSION_LABEL,
+        "latest_version": ".".join(str(part) for part in latest_version),
+        "latest_tag": latest_tag,
+        "latest_name": str(payload.get("name") or latest_tag),
+        "published_at": str(payload.get("published_at") or ""),
+        "update_available": latest_version > current_version,
+        "release_url": release_url,
+        "main_branch_url": GITHUB_MAIN_BRANCH_URL,
+    }
 
 def is_certificate_verification_error(exc: BaseException) -> bool:
     import ssl
@@ -3613,6 +3658,12 @@ INDEX_HTML = r"""<!doctype html>
         width: 100%;
         flex: 1;
       }
+      #github_dropdown {
+        left: 0;
+        right: auto;
+        width: min(280px, calc(100vw - 40px));
+        min-width: 0;
+      }
       main {
         padding: 16px 20px;
       }
@@ -3646,19 +3697,80 @@ INDEX_HTML = r"""<!doctype html>
       backdrop-filter: blur(10px);
       -webkit-backdrop-filter: blur(10px);
     }
-    .dropdown-content a {
+    .dropdown-content a,
+    .dropdown-content button {
       display: flex;
       align-items: center;
       gap: 8px;
+      width: 100%;
       padding: 10px 16px;
       color: var(--text-primary);
       text-decoration: none;
+      text-align: left;
       font-size: 13px;
       font-weight: 500;
+      font-family: inherit;
+      border: 0;
+      background: transparent;
+      box-sizing: border-box;
+      cursor: pointer;
       transition: background 0.2s;
     }
-    .dropdown-content a:hover {
+    .dropdown-content a:hover,
+    .dropdown-content button:hover:not(:disabled),
+    .dropdown-content a:focus-visible,
+    .dropdown-content button:focus-visible {
       background: rgba(255,255,255,0.08);
+      outline: none;
+    }
+    .dropdown-content button:disabled {
+      opacity: 0.55;
+      cursor: wait;
+    }
+    .github-dropdown {
+      min-width: 250px;
+      padding: 6px;
+    }
+    .version-current {
+      padding: 9px 10px 10px;
+      margin-bottom: 4px;
+      border-bottom: 1px solid var(--border-color);
+    }
+    .version-current-label {
+      color: var(--text-primary);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .version-current-meta {
+      margin-top: 3px;
+      color: var(--text-secondary);
+      font-size: 11px;
+    }
+    .update-check-status {
+      min-height: 34px;
+      margin: 6px 6px 0;
+      padding: 8px 10px;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      color: var(--text-secondary);
+      font-size: 12px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+    .update-check-status.available {
+      border-color: rgba(245, 158, 11, 0.35);
+      color: #fbbf24;
+      background: rgba(245, 158, 11, 0.08);
+    }
+    .update-check-status.current {
+      border-color: rgba(16, 185, 129, 0.3);
+      color: #34d399;
+      background: rgba(16, 185, 129, 0.08);
+    }
+    .update-check-status.error {
+      border-color: rgba(244, 63, 94, 0.3);
+      color: #fb7185;
+      background: rgba(244, 63, 94, 0.08);
     }
     
     /* Modal styles */
@@ -3795,14 +3907,23 @@ INDEX_HTML = r"""<!doctype html>
   <div class="btn-group">
 
     <div class="dropdown">
-      <button id="github_btn" class="btn-primary" style="background: rgba(255, 255, 255, 0.08); border: 1px solid var(--border-color); color: var(--text-primary);">
+      <button id="github_btn" class="btn-primary" type="button" aria-expanded="false" aria-controls="github_dropdown" style="background: rgba(255, 255, 255, 0.08); border: 1px solid var(--border-color); color: var(--text-primary);">
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" style="vertical-align: middle; margin-right: 4px;"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-        GITHUB
+        <span id="github_version_label">V2.1 正式版</span>
         <svg xmlns="http://www.w3.org/2000/svg" style="width:12px; height:12px; margin-left: 2px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" /></svg>
       </button>
-      <div id="github_dropdown" class="dropdown-content">
-        <a href="https://github.com/baoweise-bot/aimili-vpngate" target="_blank">正式版</a>
-        <a href="https://github.com/baoweise-bot/aimili-vpngate/tree/bate" target="_blank">测试版</a>
+      <div id="github_dropdown" class="dropdown-content github-dropdown">
+        <div class="version-current">
+          <div id="current_version_label" class="version-current-label">V2.1 正式版</div>
+          <div class="version-current-meta">唯一更新通道：main 主分支</div>
+        </div>
+        <button id="check_update_btn" type="button" onclick="checkForUpdate(event)">
+          <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" style="width:14px; height:14px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 8H18.5" /></svg>
+          检测更新
+        </button>
+        <a href="https://github.com/baoweise-bot/aimili-vpngate/tree/main" target="_blank" rel="noopener noreferrer">GitHub main 主分支</a>
+        <a id="latest_release_link" href="https://github.com/baoweise-bot/aimili-vpngate/releases/latest" target="_blank" rel="noopener noreferrer">下载最新正式版</a>
+        <div id="update_check_status" class="update-check-status" role="status" aria-live="polite">点击“检测更新”查询 GitHub 最新正式版。</div>
       </div>
     </div>
     <a href="https://t.me/arestemple" target="_blank" class="btn-telegram">
@@ -3814,7 +3935,7 @@ INDEX_HTML = r"""<!doctype html>
       更新节点
     </button>
     <div class="dropdown">
-      <button id="admin_btn" class="btn-primary" style="background: rgba(255, 255, 255, 0.08); border: 1px solid var(--border-color); color: var(--text-primary);">
+      <button id="admin_btn" class="btn-primary" type="button" aria-expanded="false" aria-controls="admin_dropdown" style="background: rgba(255, 255, 255, 0.08); border: 1px solid var(--border-color); color: var(--text-primary);">
         <svg xmlns="http://www.w3.org/2000/svg" style="width:16px; height:16px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
         管理员
         <svg xmlns="http://www.w3.org/2000/svg" style="width:12px; height:12px; margin-left: 2px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" /></svg>
@@ -4510,6 +4631,10 @@ function stableSortNodes() {
 }
 
 function render(){
+  const versionLabel = state.app_version_label || "V2.1 正式版";
+  if ($("github_version_label")) $("github_version_label").textContent = versionLabel;
+  if ($("current_version_label")) $("current_version_label").textContent = versionLabel;
+
   const activeNodeId = state.active_openvpn_node_id;
   const activeNode = nodes.find(n => n && (n.active || n.id === activeNodeId));
   
@@ -5022,12 +5147,48 @@ const adminDropdown = $("admin_dropdown");
 const githubBtn = $("github_btn");
 const githubDropdown = $("github_dropdown");
 
+async function checkForUpdate(event) {
+  if (event) event.stopPropagation();
+  const button = $("check_update_btn");
+  const statusBox = $("update_check_status");
+  const releaseLink = $("latest_release_link");
+  if (!button || !statusBox) return;
+
+  button.disabled = true;
+  statusBox.className = "update-check-status";
+  statusBox.textContent = "正在连接 GitHub 检查最新正式版...";
+  try {
+    const response = await fetch("./api/check_update", { cache: "no-store" });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || "更新检查失败");
+    }
+    if (releaseLink && result.release_url) releaseLink.href = result.release_url;
+    if (result.update_available) {
+      statusBox.className = "update-check-status available";
+      statusBox.textContent = `发现正式版 ${result.latest_tag}，当前为 ${result.current_version_label}。请打开正式版下载页更新。`;
+    } else {
+      statusBox.className = "update-check-status current";
+      statusBox.textContent = `当前 ${result.current_version_label} 已是最新正式版。`;
+    }
+  } catch (error) {
+    statusBox.className = "update-check-status error";
+    statusBox.textContent = error.message || "无法连接 GitHub，请稍后重试。";
+  } finally {
+    button.disabled = false;
+  }
+}
+
 if (adminBtn && adminDropdown) {
   adminBtn.onclick = (e) => {
     e.stopPropagation();
     const isShow = adminDropdown.style.display === "block";
     adminDropdown.style.display = isShow ? "none" : "block";
-    if (githubDropdown) githubDropdown.style.display = "none";
+    adminBtn.setAttribute("aria-expanded", isShow ? "false" : "true");
+    if (githubDropdown) {
+      githubDropdown.style.display = "none";
+      if (githubBtn) githubBtn.setAttribute("aria-expanded", "false");
+    }
   };
 }
 
@@ -5036,13 +5197,32 @@ if (githubBtn && githubDropdown) {
     e.stopPropagation();
     const isShow = githubDropdown.style.display === "block";
     githubDropdown.style.display = isShow ? "none" : "block";
-    if (adminDropdown) adminDropdown.style.display = "none";
+    githubBtn.setAttribute("aria-expanded", isShow ? "false" : "true");
+    if (adminDropdown) {
+      adminDropdown.style.display = "none";
+      if (adminBtn) adminBtn.setAttribute("aria-expanded", "false");
+    }
   };
+  githubDropdown.onclick = event => event.stopPropagation();
 }
 
 document.addEventListener("click", () => {
   if (adminDropdown) adminDropdown.style.display = "none";
   if (githubDropdown) githubDropdown.style.display = "none";
+  if (adminBtn) adminBtn.setAttribute("aria-expanded", "false");
+  if (githubBtn) githubBtn.setAttribute("aria-expanded", "false");
+});
+
+document.addEventListener("keydown", event => {
+  if (event.key !== "Escape") return;
+  const githubWasOpen = githubBtn && githubBtn.getAttribute("aria-expanded") === "true";
+  const adminWasOpen = adminBtn && adminBtn.getAttribute("aria-expanded") === "true";
+  if (adminDropdown) adminDropdown.style.display = "none";
+  if (githubDropdown) githubDropdown.style.display = "none";
+  if (adminBtn) adminBtn.setAttribute("aria-expanded", "false");
+  if (githubBtn) githubBtn.setAttribute("aria-expanded", "false");
+  if (githubWasOpen && githubBtn) githubBtn.focus();
+  else if (adminWasOpen && adminBtn) adminBtn.focus();
 });
 
 let showFavoritesOnly = false;
@@ -6017,6 +6197,14 @@ class Handler(BaseHTTPRequestHandler):
                     del stripped["config_text"]
                 stripped_nodes.append(stripped)
             self.send_json({"nodes": stripped_nodes, "state": get_state()})
+        elif effective_path == "/api/check_update":
+            try:
+                self.send_json(check_latest_release())
+            except Exception as exc:
+                self.send_json(
+                    {"ok": False, "error": f"无法检查 GitHub 正式版更新: {exc}"},
+                    HTTPStatus.BAD_GATEWAY,
+                )
         elif effective_path.startswith("/configs/"):
             filename = urllib.parse.unquote(effective_path.removeprefix("/configs/"))
             with lock:

@@ -1,0 +1,22 @@
+services:
+  aimilivpn:
+    image: ghcr.io/baoweise-bot/aimili-vpngate:2.1
+    container_name: aimilivpn
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      VPNGATE_DATA_DIR: /data
+      UI_HOST: "0.0.0.0"
+      UI_PORT: "8787"
+      LOCAL_PROXY_HOST: "127.0.0.1"
+      LOCAL_PROXY_PORT: "7928"
+    volumes:
+      - aimilivpn-data:/data
+    init: true
+    restart: unless-stopped
+
+volumes:
+  aimilivpn-data:

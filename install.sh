@@ -82,15 +82,7 @@ fi
 
 # 4. Clone or pull the repository
 INSTALL_DIR="/opt/aimilivpn"
-# 默认部署分支（在 bate 分支设为 bate；在 main 分支设为 main）
-DEFAULT_DEPLOY_BRANCH="main"
-
-# 自动检测本地已安装版本当前所在的分支
-CURRENT_BRANCH=""
-if [ -d "${INSTALL_DIR}/.git" ]; then
-    CURRENT_BRANCH=$(cd "${INSTALL_DIR}" && git rev-parse --abbrev-ref HEAD 2>/dev/null)
-fi
-DEPLOY_BRANCH="${CURRENT_BRANCH:-$DEFAULT_DEPLOY_BRANCH}"
+DEPLOY_BRANCH="main"
 
 echo -e "\n${YELLOW}[2/4] 正在从 GitHub 部署源代码到 ${INSTALL_DIR} (目标分支: ${DEPLOY_BRANCH})...${PLAIN}"
 if [ -f "${INSTALL_DIR}/.local_dev" ]; then
@@ -99,8 +91,8 @@ else
     if [ -d "${INSTALL_DIR}" ]; then
         echo -e "  -> 目录 ${INSTALL_DIR} 已存在，正在更新并强制覆盖本地源码..."
         cd "${INSTALL_DIR}"
-        git fetch --all || true
-        git checkout "${DEPLOY_BRANCH}" || git checkout -b "${DEPLOY_BRANCH}" "origin/${DEPLOY_BRANCH}" || true
+        git fetch origin "${DEPLOY_BRANCH}" || true
+        git checkout -B "${DEPLOY_BRANCH}" "origin/${DEPLOY_BRANCH}" || true
         echo -e "  -> 正在强制重置本地源码至 origin/${DEPLOY_BRANCH} ..."
         if git reset --hard "origin/${DEPLOY_BRANCH}"; then
             echo -e "${GREEN}  -> 源码更新成功！${PLAIN}"
@@ -113,13 +105,14 @@ else
         fi
     else
         echo -e "  -> 正在克隆 GitHub 仓库 ${GITHUB_URL} (分支: ${DEPLOY_BRANCH}) ..."
-        if git clone -b "${DEPLOY_BRANCH}" "${GITHUB_URL}" "${INSTALL_DIR}"; then
+        if git clone --branch "${DEPLOY_BRANCH}" --single-branch "${GITHUB_URL}" "${INSTALL_DIR}"; then
             echo -e "${GREEN}  -> 克隆成功！${PLAIN}"
         else
             echo -e "  -> 尝试默认克隆..."
             if git clone "${GITHUB_URL}" "${INSTALL_DIR}"; then
                 cd "${INSTALL_DIR}"
-                git checkout "${DEPLOY_BRANCH}" || git checkout -b "${DEPLOY_BRANCH}" "origin/${DEPLOY_BRANCH}" || true
+                git fetch origin "${DEPLOY_BRANCH}"
+                git checkout -B "${DEPLOY_BRANCH}" "origin/${DEPLOY_BRANCH}"
                 echo -e "${GREEN}  -> 克隆成功！${PLAIN}"
             else
                 echo -e "${RED}  -> 错误: 无法克隆仓库 ${GITHUB_URL}，请检查网络！${PLAIN}"
@@ -516,7 +509,7 @@ def show_logs():
         time.sleep(2)
 
 def update_service():
-    print("正在获取远程更新并检测版本...", flush=True)
+    print("正在从 GitHub main 主分支检测正式版更新...", flush=True)
     if os.path.exists(INSTALL_DIR):
         try:
             os.chdir(INSTALL_DIR)
@@ -525,20 +518,13 @@ def update_service():
                 time.sleep(3)
                 return
             
-            # Fetch remote origin updates
-            subprocess.run(["git", "fetch", "--all"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
-            # Detect remote branch (prefer current local branch, fallback to origin/main or origin/master)
-            curr = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True)
-            branch = curr.stdout.strip() if curr.returncode == 0 else ""
-            if not branch or branch == "HEAD":
-                branch = "main"
-                for b in ["main", "master"]:
-                    chk = subprocess.run(["git", "rev-parse", "--verify", f"origin/{b}"], capture_output=True, text=True)
-                    if chk.returncode == 0:
-                        branch = b
-                        break
-            
+            branch = "main"
+            subprocess.run(
+                ["git", "fetch", "origin", branch],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
             local_commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
             remote_commit = subprocess.run(["git", "rev-parse", f"origin/{branch}"], capture_output=True, text=True).stdout.strip()
             
@@ -557,7 +543,8 @@ def update_service():
                     time.sleep(1.5)
                     return
             
-            print(f"\n正在强制重置本地代码至 origin/{branch} ...", flush=True)
+            print(f"\n正在切换并重置到正式版 origin/{branch} ...", flush=True)
+            subprocess.run(["git", "checkout", "-B", branch, f"origin/{branch}"], check=True)
             subprocess.run(["git", "reset", "--hard", f"origin/{branch}"], check=True)
             
             # Clean up python cache files

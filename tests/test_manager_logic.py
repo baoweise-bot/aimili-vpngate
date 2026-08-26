@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import tempfile
 import threading
@@ -392,6 +393,59 @@ class ManagerLogicTests(unittest.TestCase):
         self.assertIn('colspan="7"', manager.INDEX_HTML)
         self.assertIn('class="country-option-input"', manager.INDEX_HTML)
         self.assertIn('${testBtn}', manager.INDEX_HTML)
+
+    def test_web_update_controls_only_expose_stable_main_channel(self) -> None:
+        self.assertEqual("2.1.0", manager.APP_VERSION)
+        self.assertEqual("V2.1 正式版", manager.APP_VERSION_LABEL)
+        self.assertIn("检测更新", manager.INDEX_HTML)
+        self.assertIn("/api/check_update", manager.INDEX_HTML)
+        self.assertIn("/tree/main", manager.INDEX_HTML)
+        self.assertIn("/releases/latest", manager.INDEX_HTML)
+        self.assertNotIn("/tree/bate", manager.INDEX_HTML)
+        self.assertNotIn(">测试版<", manager.INDEX_HTML)
+
+    def test_installer_updates_only_from_main(self) -> None:
+        install_text = (manager.ROOT_DIR / "install.sh").read_text(encoding="utf-8")
+
+        self.assertIn('DEPLOY_BRANCH="main"', install_text)
+        self.assertIn('branch = "main"', install_text)
+        self.assertNotIn("CURRENT_BRANCH", install_text)
+        self.assertNotIn("origin/master", install_text)
+        self.assertNotIn("bate", install_text.lower())
+
+    def test_latest_release_check_ignores_non_version_name_text(self) -> None:
+        release = {
+            "tag_name": "v2.2.0",
+            "name": "AimiliVPN V2.2 正式版",
+            "published_at": "2026-09-01T00:00:00Z",
+            "draft": False,
+            "prerelease": False,
+        }
+        with mock.patch.object(manager, "fetch_api_text", return_value=json.dumps(release)) as fetch_mock:
+            result = manager.check_latest_release()
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["update_available"])
+        self.assertEqual("2.2.0", result["latest_version"])
+        self.assertEqual("v2.2.0", result["latest_tag"])
+        self.assertEqual(
+            "https://github.com/baoweise-bot/aimili-vpngate/releases/tag/v2.2.0",
+            result["release_url"],
+        )
+        fetch_mock.assert_called_once_with(manager.GITHUB_LATEST_RELEASE_API, True)
+
+    def test_latest_release_check_reports_current_formal_version(self) -> None:
+        release = {
+            "tag_name": "v2.1.0",
+            "name": "AimiliVPN V2.1 正式版",
+            "draft": False,
+            "prerelease": False,
+        }
+        with mock.patch.object(manager, "fetch_api_text", return_value=json.dumps(release)):
+            result = manager.check_latest_release()
+
+        self.assertFalse(result["update_available"])
+        self.assertEqual("V2.1 正式版", result["current_version_label"])
 
     def test_fetch_uses_github_mirror_after_official_sources(self) -> None:
         csv_text = valid_snapshot()

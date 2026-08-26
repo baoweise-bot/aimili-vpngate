@@ -1,5 +1,9 @@
 # AimiliVPN 🌐
 
+[![正式版](https://img.shields.io/badge/正式版-V2.1-16a34a?style=flat-square)](https://github.com/baoweise-bot/aimili-vpngate/releases/latest)
+[![主分支](https://img.shields.io/badge/更新通道-main-2563eb?style=flat-square)](https://github.com/baoweise-bot/aimili-vpngate/tree/main)
+[![Docker](https://img.shields.io/badge/GHCR-amd64%20%7C%20386%20%7C%20arm64%20%7C%20armv7-0ea5e9?style=flat-square)](https://github.com/baoweise-bot/aimili-vpngate/pkgs/container/aimili-vpngate)
+
 Bilingual: [中文](#中文) | [English](#english)
 
 ---
@@ -8,6 +12,38 @@ Bilingual: [中文](#中文) | [English](#english)
 ## 中文 (Chinese)
 
 AimiliVPN 是一款基于官方 VPNGate 开放协议的高性能、零依赖 VPN 代理网关。它以纯 Python 标准库编写，内置美观响应式的管理网页，提供智能并发测速、多路由模式、出站代理网关、实时日志等强大功能。
+
+---
+
+### 📌 当前正式版本：V2.1
+
+V2.1 是项目启用正式版本标志后的首个稳定版本。仓库、安装器、命令行更新和 Web 更新检测现在全部统一使用 **`main` 主分支正式通道**。
+
+#### V2.1 更新进展
+
+- **节点来源容灾**：依次尝试 VPNGate 官方 HTTPS、官方 HTTP、GitHub Pages HTTPS、GitHub Pages HTTP、VPS 本地最近有效快照和仓库内置初始快照。
+- **获取与切换修复**：缩短被 VPNGate 域名封锁的 VPS 等待时间；切换新节点前先完成预检，目标失败时保留当前可用连接。
+- **节点可视化**：恢复延迟列，优先显示本机实测延迟；没有实测值时显示 VPNGate 官方预估值并明确标注“仅供参考”。
+- **国家筛选**：支持带国旗和节点数量的实时多选筛选，选择范围保存到本机，并作用于手动更新和后台周期同步。
+- **节点操作**：恢复单节点“检测”按钮，补齐收藏、检测、连接和断开状态逻辑。
+- **镜像同步**：GitHub Pages 每 15 分钟同步并校验官方节点快照，官方 API 被屏蔽时自动回退。
+- **Web 更新检测**：页面顶部显示 `V2.1 正式版`，可直接检查 GitHub 最新稳定 Release；只展示 `main` 和正式版下载入口。
+- **正式发布链路**：GitHub 标签自动运行 Python 兼容测试、构建四类 Linux 发行包、生成 SHA-256 校验文件并发布多架构 Docker 镜像。
+
+#### 系统与架构兼容性
+
+| 类型 | 正式支持范围 | GitHub 发行标识 |
+| --- | --- | --- |
+| Linux x64 | Intel/AMD 64 位 VPS | `linux-amd64` |
+| Linux x86 | Intel/AMD 32 位系统 | `linux-386` |
+| Linux ARM64 | AArch64、ARMv8 VPS/开发板 | `linux-arm64` |
+| Linux ARM32 | ARMv7 设备 | `linux-armv7` |
+| Linux 发行版 | Debian、Ubuntu、CentOS、RHEL、Rocky、AlmaLinux、Fedora、Oracle Linux、Amazon Linux、Alpine | 使用同一正式核心 |
+| Docker | Linux 主机上的 amd64、386、arm64、arm/v7 | GHCR 多架构镜像 |
+
+> AimiliVPN 依赖 Linux 的 TUN、OpenVPN、iptables 和策略路由，因此不发布虚假的 Windows/macOS 原生兼容包。Windows 或 macOS 只能作为代理客户端使用，不能直接运行完整网关；Docker Desktop 同样不等同于具备宿主机 TUN 能力的 Linux 服务器。
+
+项目由纯 Python 标准库组成，不需要为 CPU 编译不同的 Python 二进制。GitHub Actions 会为每种架构生成经过相同测试的正式发行包，并实际构建对应架构的 Docker 镜像。
 
 ---
 
@@ -30,15 +66,51 @@ AimiliVPN 是一款基于官方 VPNGate 开放协议的高性能、零依赖 VPN
 
 ---
 
-### 🚀 一键极速部署 (支持 Debian/Ubuntu/CentOS/Alpine 等 Linux 系统)
+### 🚀 安装与正式版更新
 
-在您的 Linux VPS 上以 root 用户执行以下对应命令：
+#### 方法一：从 main 主分支一键安装（推荐）
 
-#### 🌟 正式稳定版本 (main 分支)
+在 Linux VPS 上以 root 用户执行：
+
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/baoweise-bot/aimili-vpngate/main/install.sh)
 ```
-> 💡 **小贴士**：部署完成后，终端会输出管理网页的专属链接（含随机安全后缀，如 `http://your_vps_ip:8787/u71e9IXp4TPx`）。在终端中输入 `ml` 命令可以随时调出交互式命令行管理菜单。
+
+部署完成后，终端会输出管理网页专属链接。输入 `ml update` 时只会获取并切换到 `origin/main`，不会检测或切换任何测试分支。
+
+#### 方法二：GitHub 正式发行包
+
+[Releases 页面](https://github.com/baoweise-bot/aimili-vpngate/releases/latest)提供以下文件：
+
+- `aimilivpn-v2.1.0-linux-amd64.tar.gz`：x64 / x86_64。
+- `aimilivpn-v2.1.0-linux-386.tar.gz`：x86 32 位。
+- `aimilivpn-v2.1.0-linux-arm64.tar.gz`：ARM64 / AArch64。
+- `aimilivpn-v2.1.0-linux-armv7.tar.gz`：ARMv7 32 位。
+- `sha256sums.txt`：所有发行包的 SHA-256 校验值。
+
+#### 方法三：Docker / Docker Compose
+
+Docker 镜像地址：`ghcr.io/baoweise-bot/aimili-vpngate:2.1`。仓库中的 [`compose.yaml`](./compose.yaml) 已配置主机网络、`NET_ADMIN` 和 TUN 设备：
+
+```bash
+docker compose up -d
+docker logs -f aimilivpn
+```
+
+也可以直接运行：
+
+```bash
+docker run -d \
+  --name aimilivpn \
+  --restart unless-stopped \
+  --network host \
+  --cap-add NET_ADMIN \
+  --device /dev/net/tun:/dev/net/tun \
+  -v aimilivpn-data:/data \
+  ghcr.io/baoweise-bot/aimili-vpngate:2.1
+```
+
+> Docker 方式只支持具备 `/dev/net/tun` 的 Linux 主机。管理页面默认端口为 `8787`，本机 HTTP/SOCKS5 代理默认端口为 `7928`。
 
 ---
 
@@ -85,6 +157,9 @@ bash <(curl -Ls https://raw.githubusercontent.com/baoweise-bot/aimili-vpngate/ma
 ### 🛠️ 核心功能与操作说明
 
 * **合并操作面板**：将“更新节点”与“立即检测补齐”合并，一键触发多线程拉取与测速。
+* **正式版更新检测**：Web 顶部版本菜单可以检查 GitHub 最新稳定 Release，并提供 `main` 主分支和正式版下载入口。
+* **多国家发现范围**：节点表可实时勾选多个国家；点击“更新节点”后保存范围并影响后台周期拉取。
+* **延迟来源区分**：实测延迟正常显示，官方 Ping 回退值使用弱化样式并标注为预估。
 * **网关状态面板**：
   - **系统诊断**：检测网关心跳及后台各个子守护线程（网页服务、VPN连接管理、出站网关服务）是否正常运行。若有脚本未运行，会提示具体的异常原因。
   - **本地代理出口检测**：在网页端直接一键检测 VPS 后台对海外的实际连通状况，并回显真实的代理出站 IP 和所在地理位置。
@@ -171,7 +246,7 @@ AimiliVPN is a high-performance, zero-dependency VPN proxy gateway built entirel
 
 Run the corresponding command on your Linux VPS as root:
 
-#### 🌟 Stable Release (main branch)
+#### 🌟 V2.1 Formal Release (main branch only)
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/baoweise-bot/aimili-vpngate/main/install.sh)
 ```
