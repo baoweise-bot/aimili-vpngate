@@ -403,6 +403,7 @@ class ManagerLogicTests(unittest.TestCase):
         self.assertIn("/releases/latest", manager.INDEX_HTML)
         self.assertNotIn("/tree/bate", manager.INDEX_HTML)
         self.assertNotIn(">测试版<", manager.INDEX_HTML)
+        self.assertIn('id="deployment_mode_label"', manager.INDEX_HTML)
 
     def test_installer_updates_only_from_main(self) -> None:
         install_text = (manager.ROOT_DIR / "install.sh").read_text(encoding="utf-8")
@@ -446,6 +447,39 @@ class ManagerLogicTests(unittest.TestCase):
 
         self.assertFalse(result["update_available"])
         self.assertEqual("V2.1 正式版", result["current_version_label"])
+
+    def test_latest_release_check_reports_source_update_command(self) -> None:
+        release = {"tag_name": "v2.2.0", "draft": False, "prerelease": False}
+        with (
+            mock.patch.object(manager, "fetch_api_text", return_value=json.dumps(release)),
+            mock.patch.object(manager, "DEPLOYMENT_MODE", "source"),
+            mock.patch.object(manager, "DEPLOYMENT_MODE_LABEL", "Python 源码"),
+            mock.patch.object(manager, "UPDATE_COMMAND", "ml update"),
+        ):
+            result = manager.check_latest_release()
+
+        self.assertEqual("source", result["deployment_mode"])
+        self.assertEqual("ml update", result["update_command"])
+
+    def test_latest_release_check_reports_docker_update_command(self) -> None:
+        release = {"tag_name": "v2.2.0", "draft": False, "prerelease": False}
+        with (
+            mock.patch.object(manager, "fetch_api_text", return_value=json.dumps(release)),
+            mock.patch.object(manager, "DEPLOYMENT_MODE", "docker"),
+            mock.patch.object(manager, "DEPLOYMENT_MODE_LABEL", "Docker 容器"),
+            mock.patch.object(
+                manager,
+                "UPDATE_COMMAND",
+                "docker compose pull && docker compose up -d",
+            ),
+        ):
+            result = manager.check_latest_release()
+
+        self.assertEqual("docker", result["deployment_mode"])
+        self.assertEqual(
+            "docker compose pull && docker compose up -d",
+            result["update_command"],
+        )
 
     def test_fetch_uses_github_mirror_after_official_sources(self) -> None:
         csv_text = valid_snapshot()

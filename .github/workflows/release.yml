@@ -4,10 +4,24 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing formal tag to publish, for example v2.1.0
+        required: true
+        default: v2.1.0
+        type: string
+
+concurrency:
+  group: formal-release-${{ inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
   packages: write
+
+env:
+  RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
 
 jobs:
   test:
@@ -19,12 +33,14 @@ jobs:
         python-version: ["3.9", "3.11", "3.13"]
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Verify version tag
+      - name: Verify formal version tag
         shell: bash
-        run: test "${GITHUB_REF_NAME}" = "v$(tr -d '\r\n' < VERSION)"
+        run: test "${RELEASE_TAG}" = "v$(tr -d '\r\n' < VERSION)"
       - name: Compile Python sources
         run: python -m py_compile vpngate_manager.py vpn_utils.py proxy_server.py snapshot_utils.py
       - name: Validate installation script
@@ -34,36 +50,53 @@ jobs:
       - name: Run unit tests
         run: python -m unittest discover -s tests -v
 
-  release:
-    name: Build Linux release archives
+  docker-smoke:
+    name: Smoke test Docker ${{ matrix.slug }}
     needs: test
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            slug: amd64
+          - platform: linux/386
+            slug: 386
+          - platform: linux/arm64
+            slug: arm64
+          - platform: linux/arm/v7
+            slug: armv7
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
-      - name: Build architecture-labelled archives
-        run: python scripts/build_release_archives.py --output-dir dist
-      - name: Create GitHub formal release
-        env:
-          GH_TOKEN: ${{ github.token }}
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - name: Build architecture image for smoke test
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          platforms: ${{ matrix.platform }}
+          build-args: BUILD_VERSION=${{ env.RELEASE_TAG }}
+          tags: aimilivpn-smoke:${{ matrix.slug }}
+          cache-from: type=gha,scope=smoke-${{ matrix.slug }}
+          cache-to: type=gha,mode=max,scope=smoke-${{ matrix.slug }}
+      - name: Verify application imports in image
         shell: bash
         run: |
-          title="AimiliVPN V$(cut -d. -f1,2 VERSION) 正式版"
-          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" dist/* --clobber --repo "${GITHUB_REPOSITORY}"
-            gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --title "${title}" --notes-file RELEASE_NOTES.md
-          else
-            gh release create "${GITHUB_REF_NAME}" dist/* --repo "${GITHUB_REPOSITORY}" --title "${title}" --notes-file RELEASE_NOTES.md --verify-tag
-          fi
+          docker run --rm --platform "${{ matrix.platform }}" \
+            "aimilivpn-smoke:${{ matrix.slug }}" \
+            python3 -c 'import vpngate_manager as app; print(app.APP_VERSION)'
 
   docker:
-    name: Build multi-architecture Docker image
-    needs: test
+    name: Publish multi-architecture Docker image
+    needs: docker-smoke
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
@@ -75,11 +108,12 @@ jobs:
         id: version
         shell: bash
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_TAG#v}"
           minor="$(printf '%s' "${version}" | cut -d. -f1,2)"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
           echo "minor=${minor}" >> "${GITHUB_OUTPUT}"
-      - uses: docker/build-push-action@v7
+      - name: Build and publish Docker manifest
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
@@ -93,3 +127,28 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: mode=max
           sbom: true
+
+  release:
+    name: Publish universal Python source release
+    needs: docker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Build universal Linux source archive
+        run: python scripts/build_release_archives.py --output-dir dist
+      - name: Create GitHub formal release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          title="AimiliVPN V$(cut -d. -f1,2 VERSION) 正式版"
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" dist/* --clobber --repo "${GITHUB_REPOSITORY}"
+            gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --title "${title}" --notes-file RELEASE_NOTES.md
+          else
+            gh release create "${RELEASE_TAG}" dist/* --repo "${GITHUB_REPOSITORY}" --title "${title}" --notes-file RELEASE_NOTES.md --verify-tag

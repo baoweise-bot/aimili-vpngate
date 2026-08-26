@@ -117,6 +117,15 @@ LOCAL_PROXY_PORT = env_int("LOCAL_PROXY_PORT", 7928, 1, 65535)
 UI_HOST = os.environ.get("UI_HOST", "::")
 UI_PORT = env_int("UI_PORT", 8787, 1, 65535)
 INVALID_BACKOFF_SECONDS = env_int("INVALID_BACKOFF_SECONDS", 30 * 60, 1)
+DEPLOYMENT_MODE = os.environ.get("DEPLOYMENT_MODE", "source").strip().lower()
+if DEPLOYMENT_MODE not in {"source", "docker"}:
+    DEPLOYMENT_MODE = "source"
+DEPLOYMENT_MODE_LABEL = "Docker 容器" if DEPLOYMENT_MODE == "docker" else "Python 源码"
+UPDATE_COMMAND = (
+    "docker compose pull && docker compose up -d"
+    if DEPLOYMENT_MODE == "docker"
+    else "ml update"
+)
 
 ROOT_DIR = Path(sys.executable).resolve().parent if globals().get("__compiled__") else Path(__file__).resolve().parent
 DEFAULT_APP_VERSION = "2.1.0"
@@ -429,6 +438,8 @@ def get_state() -> dict[str, Any]:
     state.setdefault("blacklisted_nodes", 0)
     state["app_version"] = APP_VERSION
     state["app_version_label"] = APP_VERSION_LABEL
+    state["deployment_mode"] = DEPLOYMENT_MODE
+    state["deployment_mode_label"] = DEPLOYMENT_MODE_LABEL
     
     # Pre-populate settings inputs in UI
     ui_cfg = load_ui_config()
@@ -765,6 +776,9 @@ def check_latest_release() -> dict[str, Any]:
         "update_available": latest_version > current_version,
         "release_url": release_url,
         "main_branch_url": GITHUB_MAIN_BRANCH_URL,
+        "deployment_mode": DEPLOYMENT_MODE,
+        "deployment_mode_label": DEPLOYMENT_MODE_LABEL,
+        "update_command": UPDATE_COMMAND,
     }
 
 def is_certificate_verification_error(exc: BaseException) -> bool:
@@ -3915,7 +3929,7 @@ INDEX_HTML = r"""<!doctype html>
       <div id="github_dropdown" class="dropdown-content github-dropdown">
         <div class="version-current">
           <div id="current_version_label" class="version-current-label">V2.1 正式版</div>
-          <div class="version-current-meta">唯一更新通道：main 主分支</div>
+          <div id="deployment_mode_label" class="version-current-meta">Python 源码部署 · 更新通道：main</div>
         </div>
         <button id="check_update_btn" type="button" onclick="checkForUpdate(event)">
           <svg aria-hidden="true" xmlns="http://www.w3.org/2000/svg" style="width:14px; height:14px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 8H18.5" /></svg>
@@ -4634,6 +4648,10 @@ function render(){
   const versionLabel = state.app_version_label || "V2.1 正式版";
   if ($("github_version_label")) $("github_version_label").textContent = versionLabel;
   if ($("current_version_label")) $("current_version_label").textContent = versionLabel;
+  if ($("deployment_mode_label")) {
+    const modeLabel = state.deployment_mode_label || "Python 源码";
+    $("deployment_mode_label").textContent = `${modeLabel}部署 · 更新通道：main`;
+  }
 
   const activeNodeId = state.active_openvpn_node_id;
   const activeNode = nodes.find(n => n && (n.active || n.id === activeNodeId));
@@ -5166,7 +5184,11 @@ async function checkForUpdate(event) {
     if (releaseLink && result.release_url) releaseLink.href = result.release_url;
     if (result.update_available) {
       statusBox.className = "update-check-status available";
-      statusBox.textContent = `发现正式版 ${result.latest_tag}，当前为 ${result.current_version_label}。请打开正式版下载页更新。`;
+      if (result.deployment_mode === "docker") {
+        statusBox.textContent = `发现正式版 ${result.latest_tag}。请在 VPS 执行：${result.update_command}`;
+      } else {
+        statusBox.textContent = `发现正式版 ${result.latest_tag}。请执行：${result.update_command}`;
+      }
     } else {
       statusBox.className = "update-check-status current";
       statusBox.textContent = `当前 ${result.current_version_label} 已是最新正式版。`;

@@ -27,23 +27,23 @@ V2.1 是项目启用正式版本标志后的首个稳定版本。仓库、安装
 - **国家筛选**：支持带国旗和节点数量的实时多选筛选，选择范围保存到本机，并作用于手动更新和后台周期同步。
 - **节点操作**：恢复单节点“检测”按钮，补齐收藏、检测、连接和断开状态逻辑。
 - **镜像同步**：GitHub Pages 每 15 分钟同步并校验官方节点快照，官方 API 被屏蔽时自动回退。
-- **Web 更新检测**：页面顶部显示 `V2.1 正式版`，可直接检查 GitHub 最新稳定 Release；只展示 `main` 和正式版下载入口。
-- **正式发布链路**：GitHub 标签自动运行 Python 兼容测试、构建四类 Linux 发行包、生成 SHA-256 校验文件并发布多架构 Docker 镜像。
+- **Web 更新检测**：页面顶部显示 `V2.1 正式版`，只检查 GitHub 最新稳定 Release，并根据 Python 源码或 Docker 部署方式显示正确更新命令。
+- **正式发布链路**：GitHub 标签或手动重跑会依次执行 Python 兼容测试、四架构 Docker 冒烟测试、GHCR 镜像发布，全部成功后才发布通用源码包与 SHA-256 校验文件。
 
 #### 系统与架构兼容性
 
-| 类型 | 正式支持范围 | GitHub 发行标识 |
+| 类型 | 正式支持范围 | 安装或镜像标识 |
 | --- | --- | --- |
-| Linux x64 | Intel/AMD 64 位 VPS | `linux-amd64` |
-| Linux x86 | Intel/AMD 32 位系统 | `linux-386` |
-| Linux ARM64 | AArch64、ARMv8 VPS/开发板 | `linux-arm64` |
-| Linux ARM32 | ARMv7 设备 | `linux-armv7` |
+| Linux x64 | Intel/AMD 64 位 VPS | 通用 Python 源码 / Docker `linux/amd64` |
+| Linux x86 | Intel/AMD 32 位系统 | 通用 Python 源码 / Docker `linux/386` |
+| Linux ARM64 | AArch64、ARMv8 VPS/开发板 | 通用 Python 源码 / Docker `linux/arm64` |
+| Linux ARM32 | ARMv7 设备 | 通用 Python 源码 / Docker `linux/arm/v7` |
 | Linux 发行版 | Debian、Ubuntu、CentOS、RHEL、Rocky、AlmaLinux、Fedora、Oracle Linux、Amazon Linux、Alpine | 使用同一正式核心 |
 | Docker | Linux 主机上的 amd64、386、arm64、arm/v7 | GHCR 多架构镜像 |
 
 > AimiliVPN 依赖 Linux 的 TUN、OpenVPN、iptables 和策略路由，因此不发布虚假的 Windows/macOS 原生兼容包。Windows 或 macOS 只能作为代理客户端使用，不能直接运行完整网关；Docker Desktop 同样不等同于具备宿主机 TUN 能力的 Linux 服务器。
 
-项目由纯 Python 标准库组成，不需要为 CPU 编译不同的 Python 二进制。GitHub Actions 会为每种架构生成经过相同测试的正式发行包，并实际构建对应架构的 Docker 镜像。
+项目由纯 Python 标准库组成，不需要为 CPU 编译不同的 Python 二进制。GitHub Release 只提供一个通用 Linux 源码包；GHCR 才会实际构建并发布四种 CPU 架构的 Docker 镜像。
 
 ---
 
@@ -82,19 +82,24 @@ bash <(curl -Ls https://raw.githubusercontent.com/baoweise-bot/aimili-vpngate/ma
 
 [Releases 页面](https://github.com/baoweise-bot/aimili-vpngate/releases/latest)提供以下文件：
 
-- `aimilivpn-v2.1.0-linux-amd64.tar.gz`：x64 / x86_64。
-- `aimilivpn-v2.1.0-linux-386.tar.gz`：x86 32 位。
-- `aimilivpn-v2.1.0-linux-arm64.tar.gz`：ARM64 / AArch64。
-- `aimilivpn-v2.1.0-linux-armv7.tar.gz`：ARMv7 32 位。
-- `sha256sums.txt`：所有发行包的 SHA-256 校验值。
+- `aimilivpn-v2.1.0-linux-source.tar.gz`：适用于支持 Python 3 和项目系统依赖的 Linux x64、x86、ARM64、ARMv7 主机。
+- `sha256sums.txt`：源码包的 SHA-256 校验值。
 
 #### 方法三：Docker / Docker Compose
 
 Docker 镜像地址：`ghcr.io/baoweise-bot/aimili-vpngate:2.1`。仓库中的 [`compose.yaml`](./compose.yaml) 已配置主机网络、`NET_ADMIN` 和 TUN 设备：
 
 ```bash
+docker compose pull
 docker compose up -d
 docker logs -f aimilivpn
+```
+
+无法访问 GHCR 或需要自行审查构建过程时，也可以在 VPS 的仓库目录本地构建：
+
+```bash
+docker compose build
+docker compose up -d
 ```
 
 也可以直接运行：
@@ -105,12 +110,13 @@ docker run -d \
   --restart unless-stopped \
   --network host \
   --cap-add NET_ADMIN \
+  --cap-add NET_RAW \
   --device /dev/net/tun:/dev/net/tun \
   -v aimilivpn-data:/data \
   ghcr.io/baoweise-bot/aimili-vpngate:2.1
 ```
 
-> Docker 方式只支持具备 `/dev/net/tun` 的 Linux 主机。管理页面默认端口为 `8787`，本机 HTTP/SOCKS5 代理默认端口为 `7928`。
+> Docker 方式只支持具备 `/dev/net/tun` 的 Linux 主机，并需要 `NET_ADMIN`、`NET_RAW` 能力。管理页面默认端口为 `8787`，本机 HTTP/SOCKS5 代理默认端口为 `7928`。容器检测到新版本后会提示重新拉取镜像，不会在容器内执行 `git pull`。
 
 ---
 
@@ -157,7 +163,7 @@ docker run -d \
 ### 🛠️ 核心功能与操作说明
 
 * **合并操作面板**：将“更新节点”与“立即检测补齐”合并，一键触发多线程拉取与测速。
-* **正式版更新检测**：Web 顶部版本菜单可以检查 GitHub 最新稳定 Release，并提供 `main` 主分支和正式版下载入口。
+* **正式版更新检测**：Web 顶部版本菜单可以检查 GitHub 最新稳定 Release；源码部署提示 `ml update`，Docker 部署提示重新拉取并启动镜像。
 * **多国家发现范围**：节点表可实时勾选多个国家；点击“更新节点”后保存范围并影响后台周期拉取。
 * **延迟来源区分**：实测延迟正常显示，官方 Ping 回退值使用弱化样式并标注为预估。
 * **网关状态面板**：
@@ -252,6 +258,17 @@ bash <(curl -Ls https://raw.githubusercontent.com/baoweise-bot/aimili-vpngate/ma
 ```
 
 > 💡 **Quick Note**: Once installed, copy the printed URL from the terminal to access the Web UI. Type the `ml` command in the terminal to summon the interactive CLI management console.
+
+#### Docker / Docker Compose
+
+GitHub publishes prebuilt images for `linux/amd64`, `linux/386`, `linux/arm64`, and `linux/arm/v7` under `ghcr.io/baoweise-bot/aimili-vpngate:2.1`:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+To build natively on the VPS instead, run `docker compose build` before `docker compose up -d`. Docker requires a Linux host with `/dev/net/tun`, `NET_ADMIN`, and `NET_RAW` support.
 
 ---
 

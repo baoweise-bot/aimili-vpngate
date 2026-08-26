@@ -137,6 +137,7 @@ WorkingDirectory=${INSTALL_DIR}
 ExecStart=/usr/bin/python3 vpngate_manager.py
 Restart=always
 RestartSec=5
+Environment=DEPLOYMENT_MODE=source
 EnvironmentFile=-/etc/default/aimilivpn
 
 [Install]
