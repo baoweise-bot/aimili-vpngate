@@ -85,6 +85,8 @@ class ManagerLogicTests(unittest.TestCase):
             mock.patch.object(manager, "API_CACHE_FILE", root / "api_snapshot.csv"),
             mock.patch.object(manager, "API_CACHE_META_FILE", root / "api_snapshot.meta.json"),
             mock.patch.object(manager, "BUNDLED_SNAPSHOT_FILE", root / "bundled_snapshot.csv"),
+            mock.patch.object(manager.vpn_utils, "DATA_DIR", root),
+            mock.patch.object(manager.vpn_utils, "IP_CACHE_FILE", root / "ip_cache.json"),
         ]
         for patcher in self.path_patches:
             patcher.start()
@@ -155,6 +157,142 @@ class ManagerLogicTests(unittest.TestCase):
         stored = manager.read_nodes()
         self.assertEqual(5, sum(node.get("probe_status") == "available" for node in stored))
         self.assertEqual(7, sum(node.get("probe_status") == "not_checked" for node in stored))
+
+    def test_ip_classification_separates_proxy_use_from_network_type(self) -> None:
+        residential, residential_reason = manager.vpn_utils.classify_ip_type(
+            {
+                "isp": "Sony Network Communications Inc.",
+                "org": "Sony Network Communications Inc.",
+                "proxy": True,
+                "hosting": False,
+                "mobile": False,
+            }
+        )
+        softether, softether_reason = manager.vpn_utils.classify_ip_type(
+            {
+                "isp": "SoftEther",
+                "org": "SoftEther Corporation",
+                "proxy": True,
+                "hosting": False,
+                "mobile": False,
+            }
+        )
+        hosting, hosting_reason = manager.vpn_utils.classify_ip_type(
+            {"proxy": True, "hosting": True, "mobile": False}
+        )
+        mobile, mobile_reason = manager.vpn_utils.classify_ip_type(
+            {"proxy": False, "hosting": False, "mobile": True}
+        )
+
+        self.assertEqual(("residential", "consumer_or_unclassified_network"), (residential, residential_reason))
+        self.assertEqual(("hosting", "proxy_provider_datacenter"), (softether, softether_reason))
+        self.assertEqual(("hosting", "hosting_flag"), (hosting, hosting_reason))
+        self.assertEqual(("mobile", "mobile_flag"), (mobile, mobile_reason))
+
+    def test_ip_enrichment_reclassifies_legacy_cache_and_keeps_proxy_quality(self) -> None:
+        ip = "118.240.250.95"
+        manager.vpn_utils.IP_CACHE_FILE.write_text(
+            json.dumps(
+                {
+                    ip: {
+                        "ip_type": "hosting",
+                        "quality": "proxy",
+                        "cached_at": 9999999999,
+                        "classification_version": 1,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        api_result = [
+            {
+                "status": "success",
+                "query": ip,
+                "country": "Japan",
+                "regionName": "Tokyo",
+                "city": "Tokyo",
+                "isp": "Sony Network Communications Inc.",
+                "org": "Sony Network Communications Inc.",
+                "as": "AS2527 Sony Network Communications Inc.",
+                "asname": "Sony Network Communications Inc.",
+                "proxy": True,
+                "hosting": False,
+                "mobile": False,
+            }
+        ]
+        response = mock.MagicMock()
+        response.read.return_value = json.dumps(api_result).encode("utf-8")
+        response.__enter__.return_value = response
+        node = {"id": "sony", "ip": ip}
+
+        with mock.patch.object(manager.vpn_utils.urllib.request, "urlopen", return_value=response) as urlopen_mock:
+            manager.vpn_utils.enrich_ip_info([node])
+
+        self.assertEqual("residential", node["ip_type"])
+        self.assertEqual("proxy", node["quality"])
+        self.assertTrue(node["is_proxy"])
+        self.assertFalse(node["is_hosting"])
+        urlopen_mock.assert_called_once()
+        cache = json.loads(manager.vpn_utils.IP_CACHE_FILE.read_text(encoding="utf-8"))
+        self.assertEqual(manager.vpn_utils.IP_CLASSIFICATION_VERSION, cache[ip]["classification_version"])
+
+    def test_background_ip_enrichment_merges_metadata_without_replacing_status(self) -> None:
+        nodes = self.write_nodes(2)
+        nodes[0]["probe_status"] = "available"
+        manager.write_json(manager.NODES_FILE, nodes)
+
+        def fake_enrich(items):
+            for item in items:
+                item["ip_type"] = "residential"
+                item["quality"] = "proxy"
+                item["owner"] = "Consumer ISP"
+                item["is_proxy"] = True
+
+        with mock.patch.object(manager.vpn_utils, "enrich_ip_info", side_effect=fake_enrich):
+            changed = manager.enrich_stored_nodes()
+
+        stored = manager.read_nodes()
+        self.assertGreater(changed, 0)
+        self.assertEqual("available", next(node for node in stored if node["id"] == "node-0")["probe_status"])
+        self.assertTrue(all(node["ip_type"] == "residential" for node in stored))
+
+    def test_source_deadline_skips_same_host_http_and_uses_github_https(self) -> None:
+        csv_text = valid_snapshot()
+
+        def fake_fetch(url, verify_ssl=True, deadline_seconds=None):
+            if url == manager.API_HTTPS_URL:
+                raise manager.SourceDeadlineExceeded("slow official source")
+            if url == manager.MIRROR_HTTPS_URL:
+                return csv_text
+            raise AssertionError(f"unexpected source: {url}")
+
+        with (
+            mock.patch.object(manager, "fetch_api_text_with_deadline", side_effect=fake_fetch) as fetch_mock,
+            mock.patch.object(manager, "load_blacklist", return_value={}),
+            mock.patch.object(manager, "log_to_json"),
+        ):
+            nodes = manager.fetch_candidates()
+
+        self.assertEqual(1, len(nodes))
+        self.assertEqual(
+            [manager.API_HTTPS_URL, manager.MIRROR_HTTPS_URL],
+            [call.args[0] for call in fetch_mock.call_args_list],
+        )
+
+    def test_source_deadline_limits_total_fetch_time(self) -> None:
+        def slow_fetch(url, verify_ssl=True):
+            threading.Event().wait(0.1)
+            return valid_snapshot()
+
+        with mock.patch.object(manager, "fetch_api_text", side_effect=slow_fetch):
+            started = manager.time.monotonic()
+            with self.assertRaises(manager.SourceDeadlineExceeded):
+                manager.fetch_api_text_with_deadline(
+                    manager.API_HTTPS_URL,
+                    deadline_seconds=0.01,
+                )
+
+        self.assertLess(manager.time.monotonic() - started, 0.08)
 
     def test_node_probe_stops_after_systemic_openvpn_failure(self) -> None:
         nodes = self.write_nodes(12)
@@ -461,8 +599,8 @@ class ManagerLogicTests(unittest.TestCase):
         self.assertEqual(519, entries[-1]["index"])
 
     def test_web_update_controls_only_expose_stable_main_channel(self) -> None:
-        self.assertEqual("2.1.1", manager.APP_VERSION)
-        self.assertEqual("V2.1.1 正式版", manager.APP_VERSION_LABEL)
+        self.assertEqual("2.1.2", manager.APP_VERSION)
+        self.assertEqual("V2.1.2 正式版", manager.APP_VERSION_LABEL)
         self.assertIn("检测更新", manager.INDEX_HTML)
         self.assertIn("/api/check_update", manager.INDEX_HTML)
         self.assertIn("/tree/main", manager.INDEX_HTML)
@@ -496,7 +634,7 @@ class ManagerLogicTests(unittest.TestCase):
     def test_release_workflow_uses_full_patch_version(self) -> None:
         workflow_text = (manager.ROOT_DIR / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
-        self.assertIn("default: v2.1.1", workflow_text)
+        self.assertIn("default: v2.1.2", workflow_text)
         self.assertIn("AimiliVPN V$(tr -d '\\r\\n' < VERSION) 正式版", workflow_text)
         self.assertNotIn("cut -d. -f1,2 VERSION", workflow_text)
 
@@ -523,8 +661,8 @@ class ManagerLogicTests(unittest.TestCase):
 
     def test_latest_release_check_reports_current_formal_version(self) -> None:
         release = {
-            "tag_name": "v2.1.1",
-            "name": "AimiliVPN V2.1.1 正式版",
+            "tag_name": "v2.1.2",
+            "name": "AimiliVPN V2.1.2 正式版",
             "draft": False,
             "prerelease": False,
         }
@@ -532,7 +670,7 @@ class ManagerLogicTests(unittest.TestCase):
             result = manager.check_latest_release()
 
         self.assertFalse(result["update_available"])
-        self.assertEqual("V2.1.1 正式版", result["current_version_label"])
+        self.assertEqual("V2.1.2 正式版", result["current_version_label"])
 
     def test_latest_release_check_reports_source_update_command(self) -> None:
         release = {"tag_name": "v2.2.0", "draft": False, "prerelease": False}

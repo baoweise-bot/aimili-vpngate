@@ -105,6 +105,7 @@ CHECK_INTERVAL_SECONDS = env_int("CHECK_INTERVAL_SECONDS", 1260, 1)
 TARGET_VALID_NODES = env_int("TARGET_VALID_NODES", 3, 1)
 MAX_SCAN_ROWS = env_int("MAX_SCAN_ROWS", 300, 1)
 API_FETCH_TIMEOUT_SECONDS = env_int("API_FETCH_TIMEOUT_SECONDS", 10, 1, 60)
+API_SOURCE_DEADLINE_SECONDS = env_int("API_SOURCE_DEADLINE_SECONDS", 6, 2, 30)
 OPENVPN_TEST_TIMEOUT_SECONDS = env_int("OPENVPN_TEST_TIMEOUT_SECONDS", 35, 1)
 MANUAL_TEST_NODE_LIMIT = env_int("MANUAL_TEST_NODE_LIMIT", 5, 1, 20)
 INITIAL_CONNECT_TEST_LIMIT = env_int("INITIAL_CONNECT_TEST_LIMIT", 10, 1, 50)
@@ -130,7 +131,7 @@ UPDATE_COMMAND = (
 )
 
 ROOT_DIR = Path(sys.executable).resolve().parent if globals().get("__compiled__") else Path(__file__).resolve().parent
-DEFAULT_APP_VERSION = "2.1.1"
+DEFAULT_APP_VERSION = "2.1.2"
 try:
     _version_text = (ROOT_DIR / "VERSION").read_text(encoding="utf-8").strip()
 except OSError:
@@ -175,8 +176,25 @@ last_collector_heartbeat = 0.0
 last_checker_heartbeat = 0.0
 last_pinger_heartbeat = 0.0
 server_start_time = time.time()
+ip_enrichment_wakeup = threading.Event()
+
+IP_ENRICHMENT_FIELDS = (
+    "owner",
+    "asn",
+    "as_name",
+    "location",
+    "ip_type",
+    "quality",
+    "is_proxy",
+    "is_hosting",
+    "is_mobile",
+    "ip_type_reason",
+)
 
 class ConnectionCancelled(RuntimeError):
+    pass
+
+class SourceDeadlineExceeded(TimeoutError):
     pass
 
 def purge_expired_sessions(now: float | None = None) -> int:
@@ -776,6 +794,29 @@ def fetch_api_text(url: str | None = None, use_ssl_verify: bool = True) -> str:
         with urllib.request.urlopen(request, timeout=API_FETCH_TIMEOUT_SECONDS) as response:
             return read_limited(response).decode("utf-8", errors="replace")
 
+def fetch_api_text_with_deadline(
+    url: str,
+    use_ssl_verify: bool = True,
+    deadline_seconds: int | None = None,
+) -> str:
+    deadline = deadline_seconds or API_SOURCE_DEADLINE_SECONDS
+    result_queue: queue.Queue[tuple[bool, Any]] = queue.Queue(maxsize=1)
+
+    def worker() -> None:
+        try:
+            result_queue.put((True, fetch_api_text(url, use_ssl_verify)))
+        except BaseException as exc:
+            result_queue.put((False, exc))
+
+    threading.Thread(target=worker, daemon=True).start()
+    try:
+        ok, value = result_queue.get(timeout=deadline)
+    except queue.Empty as exc:
+        raise SourceDeadlineExceeded(f"节点源超过 {deadline} 秒总时限") from exc
+    if ok:
+        return str(value)
+    raise value
+
 def parse_release_version(value: Any) -> tuple[int, int, int]:
     match = re.search(r"(?i)(?:^|[^a-z0-9])v?(\d+)(?:\.(\d+))?(?:\.(\d+))?", str(value or "").strip())
     if not match:
@@ -992,15 +1033,22 @@ def fetch_candidates() -> list[dict[str, Any]]:
         load_ui_config().get("discovery_countries")
     )
     last_err: Exception | None = None
+    deadline_hosts: set[str] = set()
 
     log_to_json("INFO", "Main", "开始按官方、GitHub Pages、本地缓存顺序拉取节点列表...")
 
     for source_name, url in api_network_sources():
+        source_host = (urllib.parse.urlsplit(url).hostname or "").lower()
+        if url.startswith("http://") and source_host in deadline_hosts:
+            msg = f"跳过同主机慢速 HTTP 节点源 {source_name}: {url}"
+            print(f"[fetch_candidates] {msg}", flush=True)
+            log_to_json("WARNING", "Main", msg)
+            continue
         try:
             msg = f"尝试节点源 {source_name}: {url}"
             print(f"[fetch_candidates] {msg}", flush=True)
             log_to_json("INFO", "Main", msg)
-            api_text = fetch_api_text(url, True)
+            api_text = fetch_api_text_with_deadline(url, True)
             rows = parse_vpngate_rows(api_text)
             candidates = rows_to_candidates(rows, blacklist)
             if not candidates:
@@ -1038,6 +1086,8 @@ def fetch_candidates() -> list[dict[str, Any]]:
             return filtered_candidates
         except Exception as e:
             last_err = e
+            if isinstance(e, SourceDeadlineExceeded) and url.startswith("https://"):
+                deadline_hosts.add(source_host)
             print(f"[fetch_candidates] 节点源 {source_name} 失败: {e}", flush=True)
             log_to_json("WARNING", "Main", f"节点源 {source_name} 失败: {e}")
 
@@ -1527,6 +1577,50 @@ def sort_all_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
         key=lambda n: (-parse_int(n.get("score")), -float(n.get("probed_at", 0)))
     )
     return available_nodes + untested_nodes + unavailable_nodes
+
+def enrich_stored_nodes() -> int:
+    """Enrich every listed IP, then merge only metadata into the latest state."""
+    with lock:
+        snapshot = read_nodes()
+    if not snapshot:
+        return 0
+
+    vpn_utils.enrich_ip_info(snapshot)
+    enriched_by_id = {
+        str(node.get("id") or ""): node
+        for node in snapshot
+        if node.get("id") and node.get("ip_type")
+    }
+    if not enriched_by_id:
+        return 0
+
+    changed = 0
+    with lock:
+        current_nodes = read_nodes()
+        for current in current_nodes:
+            enriched = enriched_by_id.get(str(current.get("id") or ""))
+            if not enriched:
+                continue
+            for field in IP_ENRICHMENT_FIELDS:
+                new_value = enriched.get(field, "")
+                if current.get(field, "") != new_value:
+                    current[field] = new_value
+                    changed += 1
+        if changed:
+            write_json(NODES_FILE, sort_all_nodes(current_nodes))
+    return changed
+
+def ip_enrichment_loop() -> None:
+    while True:
+        nodes_exist = bool(read_nodes())
+        if nodes_exist:
+            try:
+                enrich_stored_nodes()
+            except Exception as exc:
+                print(f"[IP 类型] 后台批量识别失败: {exc}", flush=True)
+                log_to_json("WARNING", "Main", f"后台批量识别 IP 类型失败: {exc}")
+        ip_enrichment_wakeup.wait(300 if nodes_exist else 5)
+        ip_enrichment_wakeup.clear()
 
 def apply_routing_filters(
     nodes: list[dict[str, Any]],
@@ -2314,6 +2408,10 @@ def maintain_valid_nodes(force: bool = False) -> str:
                             "location",
                             "ip_type",
                             "quality",
+                            "is_proxy",
+                            "is_hosting",
+                            "is_mobile",
+                            "ip_type_reason",
                         ]:
                             if previous.get(key) not in (None, ""):
                                 cand[key] = previous.get(key)
@@ -2332,6 +2430,7 @@ def maintain_valid_nodes(force: bool = False) -> str:
                         pass
                         
             write_json(NODES_FILE, merged)
+            ip_enrichment_wakeup.set()
 
         initial_tested_ids: set[str] = set()
         fast_results: list[dict[str, Any]] = []
@@ -3985,12 +4084,12 @@ INDEX_HTML = r"""<!doctype html>
     <div class="dropdown">
       <button id="github_btn" class="btn-primary" type="button" aria-expanded="false" aria-controls="github_dropdown" style="background: rgba(255, 255, 255, 0.08); border: 1px solid var(--border-color); color: var(--text-primary);">
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" style="vertical-align: middle; margin-right: 4px;"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
-        <span id="github_version_label">V2.1.1 正式版</span>
+        <span id="github_version_label">V2.1.2 正式版</span>
         <svg xmlns="http://www.w3.org/2000/svg" style="width:12px; height:12px; margin-left: 2px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" /></svg>
       </button>
       <div id="github_dropdown" class="dropdown-content github-dropdown">
         <div class="version-current">
-          <div id="current_version_label" class="version-current-label">V2.1.1 正式版</div>
+          <div id="current_version_label" class="version-current-label">V2.1.2 正式版</div>
           <div id="deployment_mode_label" class="version-current-meta">Python 源码部署 · 更新通道：main</div>
         </div>
         <button id="check_update_btn" type="button" onclick="checkForUpdate(event)">
@@ -4815,7 +4914,7 @@ function stableSortNodes() {
 }
 
 function render(){
-  const versionLabel = state.app_version_label || "V2.1.1 正式版";
+  const versionLabel = state.app_version_label || "V2.1.2 正式版";
   if ($("github_version_label")) $("github_version_label").textContent = versionLabel;
   if ($("current_version_label")) $("current_version_label").textContent = versionLabel;
   if ($("deployment_mode_label")) {
@@ -7139,6 +7238,7 @@ def main() -> None:
         print("[警告] 代理网关启动超时，继续执行脚本...", flush=True)
 
     threading.Thread(target=collector_loop, daemon=True).start()
+    threading.Thread(target=ip_enrichment_loop, daemon=True).start()
     threading.Thread(target=background_proxy_checker, daemon=True).start()
     threading.Thread(target=active_node_pinger, daemon=True).start()
     

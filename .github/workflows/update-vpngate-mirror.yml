@@ -2,7 +2,8 @@ name: Update VPNGate mirror
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # Offset from quarter-hour peaks because GitHub may delay busy schedules.
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
   push:
     branches: [main]
