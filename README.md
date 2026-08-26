@@ -117,6 +117,16 @@ bash <(curl -Ls https://raw.githubusercontent.com/baoweise-bot/aimili-vpngate/ma
   * **设置上游代理**：如果您有其他可用的代理服务，可在网页管理面板中打开“管理员 -> 代理及网络设置”，配置有效的 HTTP/SOCKS5 上游代理，后台会自动通过该代理拉取更新。
   * **修改 DNS 解析器**：在终端修改 `/etc/resolv.conf`，将域名服务器替换为公共 DNS（如 `nameserver 8.8.8.8` 和 `nameserver 1.1.1.1`）。
 
+程序会按以下顺序自动回退，不需要用户手动切换：
+
+1. VPNGate 官方 HTTPS
+2. VPNGate 官方 HTTP（兼容旧系统，结果不会覆盖 HTTPS 获得的可信缓存）
+3. GitHub Pages 镜像 HTTPS
+4. GitHub Pages 镜像 HTTP
+5. VPS 本地最近有效快照；首次安装时使用仓库附带的初始快照
+
+默认镜像为 `https://baoweise-bot.github.io/aimili-vpngate/vpngate.csv`。仓库管理员需要在 GitHub 的 **Settings -> Pages** 中将 Source 设置为 **GitHub Actions**，定时工作流会每 15 分钟校验并发布一次快照。可通过 `VPNGATE_API_HTTPS_URL`、`VPNGATE_API_HTTP_URL`、`VPNGATE_MIRROR_HTTPS_URL` 和 `VPNGATE_MIRROR_HTTP_URL` 覆盖各节点源。
+
 #### 4. VPN 已成功连接，但客户端设置代理后无法上网 (无流量)
 * **原因**：部分系统启用了严格的反向路径过滤（`rp_filter`），导致策略路由的入站/出站数据包被系统误判丢弃。
 * **解决办法**：在终端输入 `ml` 命令打开交互菜单，工具会自动检测并提示您将 `rp_filter` 修复为宽松模式（值为 `2`）。
@@ -221,6 +231,10 @@ To prevent unauthorized scanning and abuse of the proxy port on the public inter
 #### 3. "API Domain Blocked" / Candidate nodes pool is empty (0 nodes)
 * **Reason**: The official VPNGate domain is blocked or DNS resolution failed on your VPS.
 * **Solution**: Add an HTTP/SOCKS5 upstream proxy in the settings panel (Admin -> Proxy Settings), or configure public DNS in `/etc/resolv.conf` (e.g., `nameserver 8.8.8.8`).
+
+The application automatically tries the official HTTPS endpoint, official HTTP endpoint, GitHub Pages HTTPS mirror, GitHub Pages HTTP mirror, and finally the last valid local snapshot. A validated initial snapshot is bundled for first startup. HTTP results remain supported for older systems but do not replace the cache obtained through HTTPS.
+
+The default mirror is `https://baoweise-bot.github.io/aimili-vpngate/vpngate.csv`. Repository administrators must select **GitHub Actions** as the Pages source under **Settings -> Pages**. The scheduled workflow validates and publishes a fresh snapshot every 15 minutes. Source URLs can be overridden with `VPNGATE_API_HTTPS_URL`, `VPNGATE_API_HTTP_URL`, `VPNGATE_MIRROR_HTTPS_URL`, and `VPNGATE_MIRROR_HTTP_URL`.
 
 ---
 

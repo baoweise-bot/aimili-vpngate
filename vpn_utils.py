@@ -17,6 +17,8 @@ DATA_DIR = Path(os.environ["VPNGATE_DATA_DIR"]).resolve() if os.environ.get("VPN
 IP_CACHE_FILE = DATA_DIR / "ip_cache.json"
 
 ip_cache_lock = threading.RLock()
+physical_interface_lock = threading.Lock()
+physical_interface_cache: tuple[str | None, float] = (None, 0.0)
 
 COUNTRY_TRANSLATIONS = {
     "Japan": "日本",
@@ -206,7 +208,7 @@ def parse_remote(config_text: str, fallback_ip: str = "") -> tuple[str, int, str
                 proto = parts[3].lower()
     return remote_host, remote_port, proto
 
-def get_physical_interface() -> str | None:
+def _detect_physical_interface() -> str | None:
     try:
         res = subprocess.run(["ip", "route"], capture_output=True, text=True, timeout=2)
         if res.returncode == 0:
@@ -232,6 +234,17 @@ def get_physical_interface() -> str | None:
     except Exception:
         pass
     return None
+
+def get_physical_interface() -> str | None:
+    global physical_interface_cache
+    now = time.monotonic()
+    with physical_interface_lock:
+        cached_interface, cached_at = physical_interface_cache
+        if cached_at > 0 and now - cached_at < 30:
+            return cached_interface
+        detected = _detect_physical_interface()
+        physical_interface_cache = (detected, now)
+        return detected
 
 def tcp_latency_ms(host: str, port: int, dev: str | None = None) -> int:
     started = time.time()

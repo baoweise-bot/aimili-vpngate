@@ -459,9 +459,9 @@ def start_proxy_server(host: str, port: int) -> None:
                     pass
                 continue
 
-            def run_client() -> None:
+            def run_client(client_socket: socket.socket = client, client_address: tuple[str, int] = address) -> None:
                 try:
-                    proxy_client(client, address)
+                    proxy_client(client_socket, client_address)
                 finally:
                     proxy_connection_sem.release()
 
