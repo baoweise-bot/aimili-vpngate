@@ -186,18 +186,27 @@ INSTALL_DIR = "/opt/aimilivpn"
 LOG_FILE = "/opt/aimilivpn/vpngate_data/vpngate.log"
 
 def generate_random_password():
-    import random
+    import secrets
     import string
     chars = string.ascii_letters + string.digits
     while True:
-        pwd = "".join(random.choices(chars, k=12))
+        pwd = "".join(secrets.choice(chars) for _ in range(12))
         if any(c.islower() for c in pwd) and any(c.isupper() for c in pwd) and any(c.isdigit() for c in pwd):
             return pwd
 
 def generate_random_suffix():
-    import random
+    import secrets
     import string
-    return "".join(random.choices(string.ascii_letters + string.digits, k=12))
+    chars = string.ascii_letters + string.digits
+    return "".join(secrets.choice(chars) for _ in range(12))
+
+def get_app_version():
+    try:
+        with open(os.path.join(INSTALL_DIR, "VERSION"), "r", encoding="utf-8") as f:
+            version = f.read().strip().lstrip("vV")
+        return version or "2.1.0"
+    except Exception:
+        return "2.1.0"
 
 def load_ui_cfg():
     import json
@@ -406,7 +415,7 @@ def print_status():
         openvpn_status = f"{green}[已连接]{reset}" if openvpn_ok else f"{red}[未连接]{reset}"
     
     print_line("=======================================================")
-    print_line(f"               {bold}AimiliVPN 管理终端 v2.0{reset}                  ")
+    print_line(f"               {bold}AimiliVPN 管理终端 v{get_app_version()}{reset}                ")
     print_line("=======================================================")
     print_line("【核心服务状态】")
     print_line(format_line(f"代理网关 (Port {proxy_port})", gateway_status))
@@ -728,7 +737,7 @@ def configure_credentials():
             new_uname = input(f"请输入新管理账号 (回车默认 {curr_uname}): ").strip()
             if not new_uname:
                 new_uname = curr_uname
-            new_pwd = input("请输入新管理密码 (不能为空): ").strip()
+            new_pwd = input("请输入新管理密码 (不能为空): ")
             if not new_pwd:
                 print("错误: 密码不能为空！")
                 time.sleep(2)
@@ -965,22 +974,22 @@ if [ ! -f "$AUTH_FILE" ]; then
     # Initialize defaults
     UI_PORT=8787
     # generate random secret suffix (12 chars alphanumeric)
-    SECRET_PATH=$(python3 -c "import random, string; print(''.join(random.choices(string.ascii_letters + string.digits, k=12)))")
+    SECRET_PATH=$(python3 -c "import secrets, string; chars = string.ascii_letters + string.digits; print(''.join(secrets.choice(chars) for _ in range(12)))")
     # generate random password
     UI_PASSWORD=$(python3 -c "
-import random, string
+import secrets, string
 chars = string.ascii_letters + string.digits
 while True:
-    pwd = ''.join(random.choices(chars, k=12))
+    pwd = ''.join(secrets.choice(chars) for _ in range(12))
     if any(c.islower() for c in pwd) and any(c.isupper() for c in pwd) and any(c.isdigit() for c in pwd):
         print(pwd)
         break
 ")
     UI_USERNAME=$(python3 -c "
-import random, string
+import secrets, string
 chars = string.ascii_letters + string.digits
 while True:
-    uname = ''.join(random.choices(chars, k=12))
+    uname = ''.join(secrets.choice(chars) for _ in range(12))
     if uname[0].isalpha() and any(c.islower() for c in uname) and any(c.isupper() for c in uname) and any(c.isdigit() for c in uname):
         print(uname)
         break
@@ -1096,7 +1105,7 @@ elif command -v rc-service >/dev/null 2>&1; then
 fi
 
 # Wait and poll for node loading and active connection
-echo -e "\n正在等待 AimiliVPN 首次获取节点并建立加密通道 (此过程可能需要 5-30 秒)..."
+echo -e "\n正在等待 AimiliVPN 首次获取节点并建立加密通道 (此过程可能需要 5-90 秒)..."
 ACTIVE_ID=""
 LAST_MSG=""
 for i in {1..90}; do

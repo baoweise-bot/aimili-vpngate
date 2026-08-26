@@ -4135,7 +4135,7 @@ INDEX_HTML = r"""<!doctype html>
     </div>
     
     <!-- 分页控制栏 -->
-    <div class="pagination-container" style="padding: 16px; display: none; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-color); flex-wrap: wrap; gap: 12px;">
+    <div id="pagination_container" class="pagination-container" style="padding: 16px; display: none; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-color); flex-wrap: wrap; gap: 12px;">
       <div style="font-size: 13px; color: var(--text-secondary);">
         显示第 <span id="page_start" style="color: var(--text-primary); font-weight:600;">0</span> - <span id="page_end" style="color: var(--text-primary); font-weight:600;">0</span> 条，共 <span id="filtered_count" style="color: var(--text-primary); font-weight:600;">0</span> 条备选节点
       </div>
@@ -4441,6 +4441,7 @@ let selectedDiscoveryCountries = new Set();
 let discoveryCountriesInitialized = false;
 let discoveryCountriesDirty = false;
 let countryFilterSignature = "";
+let lastNodesSnapshotSignature = "";
 
 const $=id=>document.getElementById(id);
 const esc=s=>String(s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
@@ -4968,6 +4969,8 @@ function render(){
 
   // Pagination calculation
   const totalPages = Math.ceil(shown.length / pageSize) || 1;
+  const paginationContainer = $("pagination_container");
+  if (paginationContainer) paginationContainer.style.display = totalPages > 1 ? "flex" : "none";
   if (currentPage > totalPages) currentPage = totalPages;
   if (currentPage < 1) currentPage = 1;
   
@@ -5132,11 +5135,18 @@ async function fetchNodesSnapshot() {
 }
 
 function applyNodesSnapshot(data) {
-  nodes = Array.isArray(data.nodes) ? data.nodes : [];
-  state = data.state || {};
+  const nextNodes = Array.isArray(data && data.nodes) ? data.nodes : [];
+  const nextState = data && data.state ? data.state : {};
+  const signature = JSON.stringify([nextNodes, nextState]);
+  if (signature === lastNodesSnapshotSignature) return false;
+
+  lastNodesSnapshotSignature = signature;
+  nodes = nextNodes;
+  state = nextState;
   stableSortNodes();
   updateCountryFilter();
   render();
+  return true;
 }
 
 function refreshButtonBusy(message = "正在后台更新...") {

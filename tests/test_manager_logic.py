@@ -402,9 +402,13 @@ class ManagerLogicTests(unittest.TestCase):
         self.assertIn("@media (prefers-reduced-motion: reduce)", manager.LOGIN_HTML)
         self.assertIn("@media (prefers-reduced-motion: reduce)", manager.INDEX_HTML)
         self.assertIn("const pageSize = 50;", manager.INDEX_HTML)
+        self.assertIn('id="pagination_container"', manager.INDEX_HTML)
+        self.assertIn('paginationContainer.style.display = totalPages > 1 ? "flex" : "none";', manager.INDEX_HTML)
         self.assertIn("const MAX_RENDERED_LOG_LINES = 300;", manager.INDEX_HTML)
         self.assertIn("nodesRequestPromise", manager.INDEX_HTML)
         self.assertIn("backgroundPollInFlight", manager.INDEX_HTML)
+        self.assertIn('let lastNodesSnapshotSignature = "";', manager.INDEX_HTML)
+        self.assertIn("if (signature === lastNodesSnapshotSignature) return false;", manager.INDEX_HTML)
         self.assertIn('typeof document.hidden !== "boolean" || !document.hidden', manager.INDEX_HTML)
         self.assertEqual(500, manager.WEB_LOG_MAX_ENTRIES)
 
@@ -475,6 +479,16 @@ class ManagerLogicTests(unittest.TestCase):
         self.assertNotIn("CURRENT_BRANCH", install_text)
         self.assertNotIn("origin/master", install_text)
         self.assertNotIn("bate", install_text.lower())
+
+    def test_installer_uses_secure_credentials_and_current_version(self) -> None:
+        install_text = (manager.ROOT_DIR / "install.sh").read_text(encoding="utf-8")
+
+        self.assertNotIn("random.choices", install_text)
+        self.assertIn("secrets.choice", install_text)
+        self.assertIn('get_app_version()', install_text)
+        self.assertNotIn("管理终端 v2.0", install_text)
+        self.assertIn("5-90 秒", install_text)
+        self.assertIn('new_pwd = input("请输入新管理密码 (不能为空): ")', install_text)
 
     def test_latest_release_check_ignores_non_version_name_text(self) -> None:
         release = {
