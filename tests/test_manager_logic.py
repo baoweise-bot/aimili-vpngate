@@ -98,6 +98,7 @@ class ManagerLogicTests(unittest.TestCase):
         manager.last_proxy_failure_node_id = ""
         manager.background_refill_thread = None
         manager.background_refill_cancel_event.clear()
+        manager.active_sessions.clear()
 
     def tearDown(self) -> None:
         if manager.connection_attempt_lock.locked():
@@ -407,6 +408,40 @@ class ManagerLogicTests(unittest.TestCase):
         self.assertIn('typeof document.hidden !== "boolean" || !document.hidden', manager.INDEX_HTML)
         self.assertEqual(500, manager.WEB_LOG_MAX_ENTRIES)
 
+    def test_web_dashboard_has_cross_browser_interaction_safeguards(self) -> None:
+        self.assertNotIn("fonts.googleapis.com", manager.LOGIN_HTML)
+        self.assertNotIn("fonts.googleapis.com", manager.INDEX_HTML)
+        self.assertIn('const pwd = document.getElementById("password").value;', manager.LOGIN_HTML)
+        self.assertIn('const password = $("cred_password").value;', manager.INDEX_HTML)
+        self.assertIn("function fetchWithTimeout", manager.LOGIN_HTML)
+        self.assertIn("function fetchWithTimeout", manager.INDEX_HTML)
+        self.assertNotIn("await fetch(", manager.INDEX_HTML)
+        self.assertIn('role="dialog" aria-modal="true"', manager.INDEX_HTML)
+        self.assertIn('aria-label="关闭网页安全设置"', manager.INDEX_HTML)
+        self.assertIn('class="option-card active" data-value="auto" aria-pressed="true"', manager.INDEX_HTML)
+        self.assertIn('class="vps-recommend-tab"', manager.INDEX_HTML)
+        self.assertIn('position: static;', manager.INDEX_HTML)
+        self.assertIn('-webkit-overflow-scrolling: touch;', manager.INDEX_HTML)
+        self.assertIn('formatUrlHost(window.location.hostname)', manager.INDEX_HTML)
+        self.assertNotIn('id="status" class="status" style="display: none;"', manager.INDEX_HTML)
+        self.assertIn('${esc(localProxy)}', manager.INDEX_HTML)
+        self.assertIn('${esc(statusMessage)}', manager.INDEX_HTML)
+
+    def test_random_password_uses_cryptographic_randomness(self) -> None:
+        with mock.patch.object(manager.secrets, "choice", side_effect=list("aA0aA0aA0aA0")) as choice:
+            password = manager.generate_random_password()
+
+        self.assertEqual("aA0aA0aA0aA0", password)
+        self.assertEqual(12, choice.call_count)
+
+    def test_expired_sessions_are_removed(self) -> None:
+        manager.active_sessions.update({"expired": 99.0, "active": 101.0})
+
+        removed = manager.purge_expired_sessions(now=100.0)
+
+        self.assertEqual(1, removed)
+        self.assertEqual({"active": 101.0}, manager.active_sessions)
+
     def test_web_log_reader_only_returns_recent_valid_entries(self) -> None:
         log_file = manager.DATA_DIR / "logs" / "current.json"
         log_file.parent.mkdir(parents=True)
@@ -597,6 +632,31 @@ class ManagerLogicTests(unittest.TestCase):
 
 
 class ProxyServerConcurrencyTests(unittest.TestCase):
+    def test_socks5_rejects_client_without_no_auth_method(self) -> None:
+        class Client:
+            def __init__(self):
+                self.incoming = bytearray(b"\x01\x02")
+                self.sent = bytearray()
+                self.closed = False
+
+            def recv(self, size):
+                chunk = self.incoming[:size]
+                del self.incoming[:size]
+                return bytes(chunk)
+
+            def sendall(self, data):
+                self.sent.extend(data)
+
+            def close(self):
+                self.closed = True
+
+        client = Client()
+        with mock.patch.object(proxy_server, "proxy_auth_enabled", return_value=False):
+            proxy_server.socks5_client(client, b"\x05")
+
+        self.assertEqual(b"\x05\xff", bytes(client.sent))
+        self.assertTrue(client.closed)
+
     def test_each_proxy_worker_keeps_its_accepted_socket(self) -> None:
         class Client:
             def __init__(self, name):

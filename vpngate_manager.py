@@ -7,6 +7,7 @@ import json
 import os
 import queue
 import re
+import secrets
 import select
 import shlex
 import signal
@@ -179,6 +180,17 @@ server_start_time = time.time()
 class ConnectionCancelled(RuntimeError):
     pass
 
+def purge_expired_sessions(now: float | None = None) -> int:
+    current_time = time.time() if now is None else now
+    with lock:
+        expired_tokens = [
+            token for token, expires_at in active_sessions.items()
+            if expires_at <= current_time
+        ]
+        for token in expired_tokens:
+            active_sessions.pop(token, None)
+    return len(expired_tokens)
+
 def ensure_dirs() -> None:
     DATA_DIR.mkdir(exist_ok=True, parents=True)
     CONFIG_DIR.mkdir(exist_ok=True, parents=True)
@@ -219,13 +231,12 @@ def read_json(path: Path, default: Any) -> Any:
             return default
 
 import hashlib
-import random
 
 def generate_random_password() -> str:
     import string
     chars = string.ascii_letters + string.digits
     while True:
-        pwd = "".join(random.choices(chars, k=12))
+        pwd = "".join(secrets.choice(chars) for _ in range(12))
         # Ensure it contains at least one lowercase, one uppercase, and one digit
         has_lower = any(c.islower() for c in pwd)
         has_upper = any(c.isupper() for c in pwd)
@@ -237,7 +248,7 @@ def generate_random_username() -> str:
     import string
     chars = string.ascii_letters + string.digits
     while True:
-        uname = "".join(random.choices(chars, k=12))
+        uname = "".join(secrets.choice(chars) for _ in range(12))
         # Ensure it starts with a letter and contains at least one lowercase, one uppercase, and one digit
         if uname[0].isalpha():
             has_lower = any(c.islower() for c in uname)
@@ -2499,7 +2510,6 @@ LOGIN_HTML = r"""<!DOCTYPE html>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AimiliVPN - 安全登录</title>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
       --bg-dark: #090d16;
@@ -2517,7 +2527,7 @@ LOGIN_HTML = r"""<!DOCTYPE html>
     body {
       margin: 0;
       padding: 0;
-      font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       background-color: var(--bg-dark);
       background-image: 
         radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
@@ -2717,10 +2727,21 @@ LOGIN_HTML = r"""<!DOCTYPE html>
   </div>
 
   <script>
+    function fetchWithTimeout(resource, options = {}, timeoutMs = 20000) {
+      if (typeof AbortController === "undefined") return fetch(resource, options);
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+      return fetch(resource, Object.assign({}, options, { signal: controller.signal }))
+        .then(
+          response => { window.clearTimeout(timeoutId); return response; },
+          error => { window.clearTimeout(timeoutId); throw error; }
+        );
+    }
+
     async function handleLogin(e) {
       e.preventDefault();
       const uname = document.getElementById("username").value.trim();
-      const pwd = document.getElementById("password").value.trim();
+      const pwd = document.getElementById("password").value;
       const errorText = document.getElementById("error_text");
       const submitBtn = document.getElementById("submit_btn");
       
@@ -2729,11 +2750,11 @@ LOGIN_HTML = r"""<!DOCTYPE html>
       submitBtn.querySelector("span").textContent = "正在验证...";
       
       try {
-        const response = await fetch("./api/login", {
+        const response = await fetchWithTimeout("./api/login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ username: uname, password: pwd })
-        });
+        }, 20000);
         
         const data = await response.json();
         if (response.ok && data.ok) {
@@ -2745,7 +2766,9 @@ LOGIN_HTML = r"""<!DOCTYPE html>
           submitBtn.querySelector("span").textContent = "登录";
         }
       } catch (err) {
-        errorText.textContent = "连接服务器失败，请稍后重试";
+        errorText.textContent = err && err.name === "AbortError"
+          ? "登录请求超时，请检查网络后重试"
+          : "连接服务器失败，请稍后重试";
         errorText.style.display = "block";
         submitBtn.disabled = false;
         submitBtn.querySelector("span").textContent = "登录";
@@ -2763,8 +2786,6 @@ INDEX_HTML = r"""<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>AimiliVPN 节点池管理系统</title>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
-    
     :root {
       --bg-dark: #0b0f19;
       --bg-surface: rgba(22, 30, 49, 0.94);
@@ -2788,7 +2809,7 @@ INDEX_HTML = r"""<!doctype html>
 
     body {
       margin: 0;
-      font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       background-color: var(--bg-dark);
       background-image: 
         radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
@@ -3094,6 +3115,8 @@ INDEX_HTML = r"""<!doctype html>
       top: 50%;
       transform: translateY(-50%);
       width: 38px;
+      height: auto;
+      min-height: 150px;
       background: var(--primary-gradient);
       border: 1px solid var(--border-color-hover);
       border-right: none;
@@ -3453,6 +3476,7 @@ INDEX_HTML = r"""<!doctype html>
 
     .table-container {
       overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
     }
 
     table {
@@ -3666,6 +3690,7 @@ INDEX_HTML = r"""<!doctype html>
         flex-direction: column;
         align-items: flex-start;
         padding: 16px 20px;
+        position: static;
       }
       .btn-group {
         width: 100%;
@@ -3702,6 +3727,14 @@ INDEX_HTML = r"""<!doctype html>
       }
       .active-card button {
         width: 100%;
+      }
+      button, .btn-telegram {
+        min-height: 44px;
+      }
+      .input-field,
+      .toolbar select,
+      .toolbar > input {
+        font-size: 16px;
       }
     }
     
@@ -3806,11 +3839,13 @@ INDEX_HTML = r"""<!doctype html>
       z-index: 10000;
       left: 0;
       top: 0;
-      width: 100%;
-      height: 100%;
-      overflow: auto;
+      right: 0;
+      bottom: 0;
+      overflow-y: auto;
+      padding: 24px;
+      box-sizing: border-box;
       background-color: rgba(9, 13, 22, 0.92);
-      align-items: center;
+      align-items: flex-start;
       justify-content: center;
     }
     .modal-content {
@@ -3823,6 +3858,10 @@ INDEX_HTML = r"""<!doctype html>
       box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
       position: relative;
       box-sizing: border-box;
+      margin: auto;
+      max-height: calc(100vh - 48px);
+      max-height: calc(100dvh - 48px);
+      overflow-y: auto;
       animation: modalFadeIn 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     }
     @keyframes modalFadeIn {
@@ -3882,11 +3921,16 @@ INDEX_HTML = r"""<!doctype html>
     }
     
     .option-card {
+      width: 100%;
+      height: auto;
       background: rgba(255, 255, 255, 0.02);
       border: 1px solid var(--border-color);
       border-radius: 10px;
       padding: 12px 14px;
       cursor: pointer;
+      color: var(--text-primary);
+      font-family: inherit;
+      text-align: left;
       transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
       user-select: none;
       position: relative;
@@ -3935,7 +3979,7 @@ INDEX_HTML = r"""<!doctype html>
       <svg xmlns="http://www.w3.org/2000/svg" style="width:24px; height:24px; color:#818cf8;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" /></svg>
       AimiliVPN 节点管理系统
     </h1>
-    <div id="status" class="status" style="display: none;"><span class="status-dot"></span>服务加载中...</div>
+    <div id="status" class="status" role="status" aria-live="polite"><span class="status-dot"></span>服务加载中...</div>
   </div>
   <div class="btn-group">
 
@@ -3959,7 +4003,7 @@ INDEX_HTML = r"""<!doctype html>
         <div id="update_check_status" class="update-check-status" role="status" aria-live="polite">点击“检测更新”查询 GitHub 最新正式版。</div>
       </div>
     </div>
-    <a href="https://t.me/arestemple" target="_blank" class="btn-telegram">
+    <a href="https://t.me/arestemple" target="_blank" rel="noopener noreferrer" class="btn-telegram">
       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" style="vertical-align: middle; margin-right: 4px;"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zM8.287 5.906c-.778.324-2.334.994-4.666 2.01-.378.15-.577.298-.595.442-.03.243.275.339.69.47l.175.055c.408.133.958.288 1.243.294.26.006.549-.1.868-.32 2.179-1.471 3.304-2.214 3.374-2.23.05-.012.12-.026.166.016.047.041.042.12.037.141-.03.129-1.227 1.241-1.846 1.817-.193.18-.33.307-.358.336-.063.065-.129.13-.19.193-.34.347-.597.609-.043.974.265.175.474.319.684.457.228.15.457.301.765.503.074.049.143.098.207.143.297.206.58.404.916.373.195-.018.398-.2.502-.754.25-1.332.74-4.22.842-5.281.01-.088.001-.22-.103-.312-.104-.092-.252-.09-.323-.087a1.52 1.52 0 0 0-.254.04z"/></svg>
       Telegram
     </a>
@@ -4108,20 +4152,20 @@ INDEX_HTML = r"""<!doctype html>
   </div>
 
   <!-- Credentials Modal (网页安全设置) -->
-  <div id="credentials_modal" class="modal">
-    <div class="modal-content">
+  <div id="credentials_modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="credentials_modal_title" aria-hidden="true">
+    <div class="modal-content" tabindex="-1">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
-        <h3 style="margin: 0; font-size: 18px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
+        <h3 id="credentials_modal_title" style="margin: 0; font-size: 18px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
           <svg xmlns="http://www.w3.org/2000/svg" style="width:20px; height:20px; color: var(--primary);" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
           网页安全
         </h3>
-        <button type="button" onclick="closeCredentialsModal()" style="background: transparent; border: none; padding: 4px; cursor: pointer; color: var(--text-secondary); width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 50%;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">
+        <button type="button" aria-label="关闭网页安全设置" onclick="closeCredentialsModal()" style="background: transparent; border: none; padding: 4px; cursor: pointer; color: var(--text-secondary); width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 50%;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">
           <svg xmlns="http://www.w3.org/2000/svg" style="width:18px; height:18px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
         </button>
       </div>
       
-      <div id="credentials_error" style="color: var(--danger); font-size: 13px; margin-bottom: 16px; padding: 8px 12px; background: rgba(244,63,94,0.1); border: 1px solid rgba(244,63,94,0.2); border-radius: 6px; display: none;"></div>
-      <div id="credentials_success" style="color: var(--success); font-size: 13px; margin-bottom: 16px; padding: 8px 12px; background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.2); border-radius: 6px; display: none;"></div>
+      <div id="credentials_error" role="alert" style="color: var(--danger); font-size: 13px; margin-bottom: 16px; padding: 8px 12px; background: rgba(244,63,94,0.1); border: 1px solid rgba(244,63,94,0.2); border-radius: 6px; display: none;"></div>
+      <div id="credentials_success" role="status" aria-live="polite" style="color: var(--success); font-size: 13px; margin-bottom: 16px; padding: 8px 12px; background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.2); border-radius: 6px; display: none;"></div>
 
       <form id="credentials_form" onsubmit="saveCredentials(event)">
         <div class="form-group" style="margin-bottom: 12px;">
@@ -4153,20 +4197,20 @@ INDEX_HTML = r"""<!doctype html>
   </div>
 
   <!-- Network Modal (代理及网络设置，包括出站路由) -->
-  <div id="network_modal" class="modal">
-    <div class="modal-content" style="max-width: 480px;">
+  <div id="network_modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="network_modal_title" aria-hidden="true">
+    <div class="modal-content" tabindex="-1" style="max-width: 480px;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
-        <h3 style="margin: 0; font-size: 18px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
+        <h3 id="network_modal_title" style="margin: 0; font-size: 18px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
           <svg xmlns="http://www.w3.org/2000/svg" style="width:20px; height:20px; color: var(--primary);" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
           代理设置
         </h3>
-        <button type="button" onclick="closeNetworkModal()" style="background: transparent; border: none; padding: 4px; cursor: pointer; color: var(--text-secondary); width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 50%;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">
+        <button type="button" aria-label="关闭代理设置" onclick="closeNetworkModal()" style="background: transparent; border: none; padding: 4px; cursor: pointer; color: var(--text-secondary); width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 50%;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">
           <svg xmlns="http://www.w3.org/2000/svg" style="width:18px; height:18px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
         </button>
       </div>
       
-      <div id="network_error" style="color: var(--danger); font-size: 13px; margin-bottom: 16px; padding: 8px 12px; background: rgba(244,63,94,0.1); border: 1px solid rgba(244,63,94,0.2); border-radius: 6px; display: none;"></div>
-      <div id="network_success" style="color: var(--success); font-size: 13px; margin-bottom: 16px; padding: 8px 12px; background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.2); border-radius: 6px; display: none;"></div>
+      <div id="network_error" role="alert" style="color: var(--danger); font-size: 13px; margin-bottom: 16px; padding: 8px 12px; background: rgba(244,63,94,0.1); border: 1px solid rgba(244,63,94,0.2); border-radius: 6px; display: none;"></div>
+      <div id="network_success" role="status" aria-live="polite" style="color: var(--success); font-size: 13px; margin-bottom: 16px; padding: 8px 12px; background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.2); border-radius: 6px; display: none;"></div>
 
       <form id="network_form" onsubmit="saveNetwork(event)">
         <div class="form-group" style="margin-bottom: 16px;">
@@ -4179,18 +4223,18 @@ INDEX_HTML = r"""<!doctype html>
             <label class="form-label">IP 出站路由模式</label>
             <input type="hidden" id="net_routing_mode" value="auto">
             <div class="option-group" id="routing_mode_group">
-              <div class="option-card active" data-value="auto" onclick="setRoutingMode('auto')">
+              <button type="button" class="option-card active" data-value="auto" aria-pressed="true" onclick="setRoutingMode('auto')">
                 <div class="option-card-title">自动配置</div>
                 <div class="option-card-desc">智能切换，最稳定</div>
-              </div>
-              <div class="option-card" data-value="fixed_ip" onclick="setRoutingMode('fixed_ip')">
+              </button>
+              <button type="button" class="option-card" data-value="fixed_ip" aria-pressed="false" onclick="setRoutingMode('fixed_ip')">
                 <div class="option-card-title">固定 IP</div>
                 <div class="option-card-desc">锁定IP，不自动切换</div>
-              </div>
-              <div class="option-card" data-value="fixed_region" onclick="setRoutingMode('fixed_region')">
+              </button>
+              <button type="button" class="option-card" data-value="fixed_region" aria-pressed="false" onclick="setRoutingMode('fixed_region')">
                 <div class="option-card-title">固定地区</div>
                 <div class="option-card-desc">锁定特定国家地区</div>
-              </div>
+              </button>
             </div>
           </div>
           
@@ -4205,18 +4249,18 @@ INDEX_HTML = r"""<!doctype html>
             <label class="form-label">IP 出站类型过滤</label>
             <input type="hidden" id="net_routing_ip_type" value="all">
             <div class="option-group" id="routing_ip_type_group">
-              <div class="option-card active" data-value="all" onclick="setRoutingIpType('all')">
+              <button type="button" class="option-card active" data-value="all" aria-pressed="true" onclick="setRoutingIpType('all')">
                 <div class="option-card-title">所有IP</div>
                 <div class="option-card-desc">机房 + 住宅</div>
-              </div>
-              <div class="option-card" data-value="residential" onclick="setRoutingIpType('residential')">
+              </button>
+              <button type="button" class="option-card" data-value="residential" aria-pressed="false" onclick="setRoutingIpType('residential')">
                 <div class="option-card-title">住宅IP</div>
                 <div class="option-card-desc">静态家宽</div>
-              </div>
-              <div class="option-card" data-value="hosting" onclick="setRoutingIpType('hosting')">
+              </button>
+              <button type="button" class="option-card" data-value="hosting" aria-pressed="false" onclick="setRoutingIpType('hosting')">
                 <div class="option-card-title">机房IP</div>
                 <div class="option-card-desc">普通机房</div>
-              </div>
+              </button>
             </div>
           </div>
           
@@ -4235,14 +4279,14 @@ INDEX_HTML = r"""<!doctype html>
 
 
   <!-- VPS 购买推荐 Modal -->
-  <div id="vps_recommend_modal" class="modal">
-    <div class="modal-content" style="max-width: 640px;">
+  <div id="vps_recommend_modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="vps_modal_title" aria-hidden="true">
+    <div class="modal-content" tabindex="-1" style="max-width: 640px;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
-        <h3 style="margin: 0; font-size: 18px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
+        <h3 id="vps_modal_title" style="margin: 0; font-size: 18px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
           <svg xmlns="http://www.w3.org/2000/svg" style="width:20px; height:20px; color: var(--warning);" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364.364l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>
           VPS 购买推荐
         </h3>
-        <button type="button" onclick="closeVpsModal()" style="background: transparent; border: none; padding: 4px; cursor: pointer; color: var(--text-secondary); width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 50%;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">
+        <button type="button" aria-label="关闭 VPS 推荐" onclick="closeVpsModal()" style="background: transparent; border: none; padding: 4px; cursor: pointer; color: var(--text-secondary); width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 50%;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">
           <svg xmlns="http://www.w3.org/2000/svg" style="width:18px; height:18px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
         </button>
       </div>
@@ -4251,17 +4295,17 @@ INDEX_HTML = r"""<!doctype html>
         <div class="vps-item">
           <span class="vps-tag tag-normal">RNVPS (RackNerd) 推荐</span>
           <span class="vps-desc">超低折扣价格，性价比极高，日常使用实惠方便，海外多机房可选，非常适合普通大众用户。</span>
-          <a href="https://my.racknerd.com/aff.php?aff=18708" target="_blank" class="vps-btn">点击进入官网</a>
+          <a href="https://my.racknerd.com/aff.php?aff=18708" target="_blank" rel="noopener noreferrer" class="vps-btn">点击进入官网</a>
         </div>
         <div class="vps-item">
           <span class="vps-tag tag-premium">搬瓦工 (Bandwagon) 推荐</span>
           <span class="vps-desc">直连三网顶级专线，经典高带宽 CN2 GIA/9929 优化线路，极致速度且超凡稳定，高端用户首选。</span>
-          <a href="https://bandwagonhost.com/aff.php?aff=81790" target="_blank" class="vps-btn">点击进入官网</a>
+          <a href="https://bandwagonhost.com/aff.php?aff=81790" target="_blank" rel="noopener noreferrer" class="vps-btn">点击进入官网</a>
         </div>
       </div>
       
       <div class="vps-footer" style="margin-top: 20px;">
-        官方技术支持及优质资源交流论坛：<a href="https://339936.xyz" target="_blank" class="forum-link">339936.xyz</a>
+        官方技术支持及优质资源交流论坛：<a href="https://339936.xyz" target="_blank" rel="noopener noreferrer" class="forum-link">339936.xyz</a>
       </div>
 
       <div class="vps-footer" style="margin-top: 16px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 16px; text-align: left; font-size: 13px; color: var(--text-secondary); line-height: 1.6;">
@@ -4277,17 +4321,17 @@ INDEX_HTML = r"""<!doctype html>
     </div>
   </div>
 
-  <div class="vps-recommend-tab" onclick="openVpsModal()">VPS购买推荐</div>
+  <button type="button" class="vps-recommend-tab" onclick="openVpsModal()">VPS购买推荐</button>
 
   <!-- Gateway Modal (网关自检与代理测试) -->
-  <div id="gateway_modal" class="modal">
-    <div class="modal-content" style="max-width: 600px; width: 90%;">
+  <div id="gateway_modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="gateway_modal_title" aria-hidden="true">
+    <div class="modal-content" tabindex="-1" style="max-width: 600px; width: 90%;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-        <h3 style="margin: 0; font-size: 18px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
+        <h3 id="gateway_modal_title" style="margin: 0; font-size: 18px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
           <svg xmlns="http://www.w3.org/2000/svg" style="width:20px; height:20px; color: var(--primary);" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
           网关设置与自检
         </h3>
-        <button type="button" onclick="closeGatewayModal()" style="background: transparent; border: none; padding: 4px; cursor: pointer; color: var(--text-secondary); width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 50%;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">
+        <button type="button" aria-label="关闭网关设置" onclick="closeGatewayModal()" style="background: transparent; border: none; padding: 4px; cursor: pointer; color: var(--text-secondary); width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 50%;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">
           <svg xmlns="http://www.w3.org/2000/svg" style="width:18px; height:18px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
         </button>
       </div>
@@ -4340,10 +4384,10 @@ INDEX_HTML = r"""<!doctype html>
   </div>
 
   <!-- Logs Modal (日志监控与分类筛选) -->
-  <div id="logs_modal" class="modal">
-    <div class="modal-content" style="max-width: 800px; width: 95%;">
+  <div id="logs_modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="logs_modal_title" aria-hidden="true">
+    <div class="modal-content" tabindex="-1" style="max-width: 800px; width: 95%;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
-        <h3 style="margin: 0; font-size: 18px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
+        <h3 id="logs_modal_title" style="margin: 0; font-size: 18px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 8px;">
           <svg xmlns="http://www.w3.org/2000/svg" style="width:20px; height:20px; color: var(--primary);" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
           今日运行日志
         </h3>
@@ -4358,7 +4402,7 @@ INDEX_HTML = r"""<!doctype html>
           </select>
         </div>
         
-        <button type="button" onclick="closeLogsModal()" style="background: transparent; border: none; padding: 4px; cursor: pointer; color: var(--text-secondary); width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 50%;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">
+        <button type="button" aria-label="关闭日志" onclick="closeLogsModal()" style="background: transparent; border: none; padding: 4px; cursor: pointer; color: var(--text-secondary); width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 50%;" onmouseover="this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.background='transparent'">
           <svg xmlns="http://www.w3.org/2000/svg" style="width:18px; height:18px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
         </button>
       </div>
@@ -4388,6 +4432,8 @@ INDEX_HTML = r"""<!doctype html>
 </main>
 <script>
 let nodes=[], state={}, testingNodeIds = new Set();
+const favoriteRequestIds = new Set();
+let disconnectInFlight = false;
 let currentPage = 1;
 const pageSize = 50;
 let currentPageNodes = [];
@@ -4398,6 +4444,101 @@ let countryFilterSignature = "";
 
 const $=id=>document.getElementById(id);
 const esc=s=>String(s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
+function fetchWithTimeout(resource, options = {}, timeoutMs = 20000) {
+  if (typeof AbortController === "undefined") return fetch(resource, options);
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(resource, Object.assign({}, options, { signal: controller.signal }))
+    .then(
+      response => { window.clearTimeout(timeoutId); return response; },
+      error => { window.clearTimeout(timeoutId); throw error; }
+    );
+}
+async function readJsonResponse(response, fallbackMessage) {
+  let data = {};
+  try {
+    data = await response.json();
+  } catch (error) {
+    if (response.ok) throw new Error("服务器返回了无效数据");
+  }
+  if (!response.ok) throw new Error(data.error || `${fallbackMessage} (${response.status})`);
+  return data;
+}
+function formatUrlHost(hostname) {
+  const host = String(hostname || "");
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+}
+
+let activeModalId = "";
+let modalReturnFocus = null;
+let previousBodyOverflow = "";
+function showModal(id, preferredFocusSelector) {
+  const modal = $(id);
+  if (!modal) return;
+  modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  previousBodyOverflow = document.body.style.overflow;
+  activeModalId = id;
+  modal.style.display = "flex";
+  modal.setAttribute("aria-hidden", "false");
+  document.body.style.overflow = "hidden";
+  window.setTimeout(() => {
+    const preferred = preferredFocusSelector ? modal.querySelector(preferredFocusSelector) : null;
+    const first = preferred || modal.querySelector('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])');
+    const focusTarget = first || modal.querySelector(".modal-content");
+    if (focusTarget) focusTarget.focus();
+  }, 0);
+}
+function hideModal(id) {
+  const modal = $(id);
+  if (!modal) return;
+  modal.style.display = "none";
+  modal.setAttribute("aria-hidden", "true");
+  if (activeModalId === id) {
+    activeModalId = "";
+    document.body.style.overflow = previousBodyOverflow;
+    const returnTarget = modalReturnFocus;
+    modalReturnFocus = null;
+    if (returnTarget && document.contains(returnTarget)) returnTarget.focus();
+  }
+}
+function closeActiveModal() {
+  if (activeModalId === "credentials_modal") closeCredentialsModal();
+  else if (activeModalId === "network_modal") closeNetworkModal();
+  else if (activeModalId === "vps_recommend_modal") closeVpsModal();
+  else if (activeModalId === "gateway_modal") closeGatewayModal();
+  else if (activeModalId === "logs_modal") closeLogsModal();
+}
+document.querySelectorAll(".modal").forEach(modal => {
+  modal.addEventListener("mousedown", event => {
+    if (event.target === modal && activeModalId === modal.id) closeActiveModal();
+  });
+});
+document.addEventListener("keydown", event => {
+  if (!activeModalId) return;
+  const modal = $(activeModalId);
+  if (!modal) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeActiveModal();
+    return;
+  }
+  if (event.key !== "Tab") return;
+  const focusable = Array.from(modal.querySelectorAll('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+  if (!focusable.length) {
+    event.preventDefault();
+    modal.querySelector(".modal-content").focus();
+    return;
+  }
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+});
 const renderedHtmlCache = new WeakMap();
 function setHtmlIfChanged(element, html) {
   if (!element || renderedHtmlCache.get(element) === html) return false;
@@ -4736,7 +4877,7 @@ function render(){
             </div>
           </div>
         </div>
-        <button class="btn-danger" style="height: 38px; padding: 0 16px; border-radius: 8px;" onclick="disconnectNode()">
+        <button class="btn-danger" ${disconnectInFlight ? "disabled" : ""} style="height: 38px; padding: 0 16px; border-radius: 8px;" onclick="disconnectNode()">
           <svg xmlns="http://www.w3.org/2000/svg" style="width:16px; height:16px;" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
           断开连接
         </button>
@@ -4770,9 +4911,9 @@ function render(){
   if ($("active")) $("active").textContent = activeNode ? 1 : 0; 
   
   const statusMessage = state.last_check_message || "";
-  const activeNodeInfo = activeNode ? `<span class="badge available" style="margin-left:8px; padding:2px 8px;">${esc(translateCountry(activeNode.country))} (${activeNode.id})</span>` : `<span class="badge unavailable" style="margin-left:8px; padding:2px 8px;">无</span>`;
+  const activeNodeInfo = activeNode ? `<span class="badge available" style="margin-left:8px; padding:2px 8px;">${esc(translateCountry(activeNode.country))} (${esc(activeNode.id)})</span>` : `<span class="badge unavailable" style="margin-left:8px; padding:2px 8px;">无</span>`;
   const localProxy = state.local_proxy || `http://127.0.0.1:${state.proxy_port || 7928}`;
-  if ($("status")) { $("status").innerHTML=`<span class="status-dot"></span>HTTP 代理本地接口：${localProxy} | 活动节点：${activeNodeInfo} | 状态：${statusMessage}`; }
+  if ($("status")) { $("status").innerHTML=`<span class="status-dot"></span>HTTP 代理本地接口：${esc(localProxy)} | 活动节点：${activeNodeInfo} | 状态：${esc(statusMessage)}`; }
   
   // Update proxy test status card based on background checks
   const pBadge = $("proxy_status_badge");
@@ -4865,9 +5006,10 @@ function render(){
       
       const favoriteIds = Array.isArray(state.favorite_node_ids) ? state.favorite_node_ids : [];
       const isFav = favoriteIds.includes(n.id);
+      const favoriteBusy = favoriteRequestIds.has(n.id);
       const favBtn = isFav 
-        ? `<button class="test-btn" style="color: var(--warning); border-color: rgba(245, 158, 11, 0.4); padding: 0 8px; height: 30px;" onclick="toggleFavorite('${esc(n.id)}', event)">★ 已收藏</button>`
-        : `<button class="test-btn" style="color: var(--text-secondary); border-color: var(--border-color); padding: 0 8px; height: 30px;" onclick="toggleFavorite('${esc(n.id)}', event)">☆ 收藏</button>`;
+        ? `<button class="test-btn" ${favoriteBusy ? "disabled" : ""} style="color: var(--warning); border-color: rgba(245, 158, 11, 0.4); padding: 0 8px; height: 30px;" onclick="toggleFavorite('${esc(n.id)}', event)">${favoriteBusy ? "处理中" : "★ 已收藏"}</button>`
+        : `<button class="test-btn" ${favoriteBusy ? "disabled" : ""} style="color: var(--text-secondary); border-color: var(--border-color); padding: 0 8px; height: 30px;" onclick="toggleFavorite('${esc(n.id)}', event)">${favoriteBusy ? "处理中" : "☆ 收藏"}</button>`;
 
       return `<tr ${rowClass}>
         <td><span class="badge ${badgeClass}">${badgeText}</span></td>
@@ -4918,16 +5060,17 @@ $("btn_last_page").onclick = () => {
 
 async function testNode(btn, id, event){
   if (event) event.stopPropagation();
+  if (testingNodeIds.has(id)) return;
   testingNodeIds.add(id);
   render();
   
   try {
-    const response = await fetch("./api/test_node", {
+    const response = await fetchWithTimeout("./api/test_node", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id })
-    });
-    const result = await response.json();
+    }, 45000);
+    const result = await readJsonResponse(response, "节点检测失败");
     if (result.ok && result.node) {
       const idx = nodes.findIndex(n => n && n.id === id);
       if (idx !== -1) {
@@ -4935,6 +5078,7 @@ async function testNode(btn, id, event){
       }
     }
   } catch (e) {
+    alert("节点检测失败: " + (e.message || "未知错误"));
   } finally {
     testingNodeIds.delete(id);
     render();
@@ -4943,19 +5087,26 @@ async function testNode(btn, id, event){
 
 async function toggleFavorite(id, event) {
   if (event) event.stopPropagation();
+  if (favoriteRequestIds.has(id)) return;
+  favoriteRequestIds.add(id);
+  render();
   try {
-    const response = await fetch("./api/toggle_favorite", {
+    const response = await fetchWithTimeout("./api/toggle_favorite", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id })
-    });
-    const result = await response.json();
+    }, 20000);
+    const result = await readJsonResponse(response, "切换收藏失败");
     if (result.ok) {
       state.favorite_node_ids = Array.isArray(result.favorite_node_ids) ? result.favorite_node_ids : [];
       render();
     }
   } catch (e) {
     console.error("切换收藏失败", e);
+    alert("切换收藏失败: " + (e.message || "未知错误"));
+  } finally {
+    favoriteRequestIds.delete(id);
+    render();
   }
 }
 
@@ -4968,7 +5119,7 @@ let nodesRequestPromise = null;
 async function fetchNodesSnapshot() {
   if (nodesRequestPromise) return nodesRequestPromise;
   const request = (async () => {
-    const response = await fetch("./api/nodes", { cache: "no-store" });
+    const response = await fetchWithTimeout("./api/nodes", { cache: "no-store" }, 20000);
     if (!response.ok) throw new Error(`节点状态请求失败 (${response.status})`);
     return response.json();
   })();
@@ -5040,7 +5191,7 @@ function startConnectionPolling() {
         clearInterval(pollInterval);
         pollInterval = null;
         try {
-          await fetch("./api/test_proxy", { method: "POST" });
+          await fetchWithTimeout("./api/test_proxy", { method: "POST" }, 45000);
         } catch(pe){}
         load();
       }
@@ -5061,15 +5212,15 @@ async function connectNode(id){
   state.last_check_message = "正在发送连接请求...";
   render();
   
-  startConnectionPolling();
-  
   try {
-    const r = await fetch("./api/connect",{
+    const request = fetchWithTimeout("./api/connect",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({id})
-    });
-    const result = await r.json();
+    }, 180000);
+    startConnectionPolling();
+    const r = await request;
+    const result = await readJsonResponse(r, "连接请求失败");
     if (!result.ok) {
       if (!result.cancelled) {
         alert("连接失败: " + (result.error || "未知错误"));
@@ -5084,32 +5235,42 @@ async function connectNode(id){
       return;
     }
   } catch(e) {
-    alert("连接请求错误");
+    alert("连接请求错误: " + (e.message || "未知错误"));
     if (pollInterval) {
       clearInterval(pollInterval);
       pollInterval = null;
     }
     state.is_connecting = false;
     state.pending_node_id = "";
-    render();
+    try {
+      await load();
+    } catch (loadError) {
+      render();
+    }
   }
 }
 
 async function disconnectNode(){
+  if (disconnectInFlight) return;
   if (!confirm("确定要断开当前的 VPN 连接吗？")) return;
+  disconnectInFlight = true;
+  render();
   try {
-    const response = await fetch("./api/disconnect", { method: "POST" });
-    const result = await response.json();
+    const response = await fetchWithTimeout("./api/disconnect", { method: "POST" }, 60000);
+    const result = await readJsonResponse(response, "断开连接失败");
     if (result.ok) {
       try {
-        await fetch("./api/test_proxy", { method: "POST" });
+        await fetchWithTimeout("./api/test_proxy", { method: "POST" }, 45000);
       } catch(pe){}
       load();
     } else {
       alert("断开连接失败: " + (result.error || "未知错误"));
     }
   } catch (e) {
-    alert("请求断开连接失败");
+    alert("请求断开连接失败: " + (e.message || "未知错误"));
+  } finally {
+    disconnectInFlight = false;
+    render();
   }
 }
 
@@ -5147,14 +5308,14 @@ $("status_filter").onchange=()=>{ currentPage = 1; render(); };
 $("refresh").onclick=async()=>{
   refreshButtonBusy("正在启动更新...");
   try{
-    const response = await fetch("./api/refresh_nodes",{
+    const response = await fetchWithTimeout("./api/refresh_nodes",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({
         discovery_countries: Array.from(selectedDiscoveryCountries).sort()
       })
-    });
-    const result = await response.json();
+    }, 25000);
+    const result = await readJsonResponse(response, "节点更新启动失败");
     if (!response.ok || !result.ok) {
       throw new Error(result.error || "节点更新启动失败");
     }
@@ -5184,8 +5345,8 @@ $("btn_test_proxy").onclick = async () => {
   latVal.textContent = "";
   
   try {
-    const response = await fetch("./api/test_proxy", { method: "POST" });
-    const result = await response.json();
+    const response = await fetchWithTimeout("./api/test_proxy", { method: "POST" }, 45000);
+    const result = await readJsonResponse(response, "代理检测失败");
     if (result.ok) {
       badge.className = "badge available";
       badge.textContent = "可用";
@@ -5227,8 +5388,8 @@ async function checkForUpdate(event) {
   statusBox.className = "update-check-status";
   statusBox.textContent = "正在连接 GitHub 检查最新正式版...";
   try {
-    const response = await fetch("./api/check_update", { cache: "no-store" });
-    const result = await response.json();
+    const response = await fetchWithTimeout("./api/check_update", { cache: "no-store" }, 25000);
+    const result = await readJsonResponse(response, "更新检查失败");
     if (!response.ok || !result.ok) {
       throw new Error(result.error || "更新检查失败");
     }
@@ -5348,7 +5509,7 @@ async function toggleFavRouting() {
   updateFavPanelUI();
   
   try {
-    const res = await fetch("./api/update_routing", {
+    const res = await fetchWithTimeout("./api/update_routing", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -5356,8 +5517,8 @@ async function toggleFavRouting() {
         force_country: state.force_country || "",
         routing_ip_type: state.routing_ip_type || "all"
       })
-    });
-    const data = await res.json();
+    }, 25000);
+    const data = await readJsonResponse(res, "更新出站路由设置失败");
     if (res.ok && data.ok) {
       load();
     } else {
@@ -5377,7 +5538,9 @@ function selectOptionCard(groupName, value) {
     
     const cards = document.querySelectorAll("#routing_mode_group .option-card");
     cards.forEach(card => {
-      if (card.getAttribute("data-value") === value) {
+      const selected = card.getAttribute("data-value") === value;
+      card.setAttribute("aria-pressed", selected ? "true" : "false");
+      if (selected) {
         card.classList.add("active");
       } else {
         card.classList.remove("active");
@@ -5391,7 +5554,9 @@ function selectOptionCard(groupName, value) {
     
     const cards = document.querySelectorAll("#routing_ip_type_group .option-card");
     cards.forEach(card => {
-      if (card.getAttribute("data-value") === value) {
+      const selected = card.getAttribute("data-value") === value;
+      card.setAttribute("aria-pressed", selected ? "true" : "false");
+      if (selected) {
         card.classList.add("active");
       } else {
         card.classList.remove("active");
@@ -5429,7 +5594,7 @@ function handleRoutingModeChange(mode) {
     warningDiv.style.color = "var(--warning)";
     warningDiv.style.background = "rgba(245, 158, 11, 0.1)";
     warningDiv.style.border = "1px solid rgba(245, 158, 11, 0.2)";
-    warningDiv.innerHTML = `⚠️ <strong>固定IP</strong>：锁定当前连接的节点。不管该节点是否失效，系统都绝不自动切换至其他IP；如果节点由于网络故障失效，会造成代理中断（但如果OpenVPN连接意外退出，脚本将尝试为您在后台重新拉起连接同一IP）。<br><strong>提示</strong>：您可以在主页 of 节点列表中直接点击“连接”按钮来选择并锁定不同的IP节点。`;
+    warningDiv.innerHTML = `⚠️ <strong>固定IP</strong>：锁定当前连接的节点。不管该节点是否失效，系统都绝不自动切换至其他IP；如果节点由于网络故障失效，会造成代理中断（但如果OpenVPN连接意外退出，脚本将尝试为您在后台重新拉起连接同一IP）。<br><strong>提示</strong>：您可以在主页节点列表中直接点击“连接”按钮来选择并锁定不同的IP节点。`;
   } else {
     countryGroup.style.display = "none";
     warningDiv.style.color = "var(--text-secondary)";
@@ -5472,12 +5637,12 @@ function openCredentialsModal() {
     $("cred_port").value = state.port || 8787;
     $("cred_suffix").value = state.secret_path || "";
   }
-  $("credentials_modal").style.display = "flex";
+  showModal("credentials_modal", "#cred_username");
   $("admin_dropdown").style.display = "none";
 }
 
 function closeCredentialsModal() {
-  $("credentials_modal").style.display = "none";
+  hideModal("credentials_modal");
 }
 
 async function saveCredentials(e) {
@@ -5490,7 +5655,7 @@ async function saveCredentials(e) {
   successDiv.style.display = "none";
   
   const username = $("cred_username").value.trim();
-  const password = $("cred_password").value.trim();
+  const password = $("cred_password").value;
   const port = parseInt($("cred_port").value);
   const suffix = $("cred_suffix").value.trim();
   
@@ -5522,7 +5687,7 @@ async function saveCredentials(e) {
   submitBtn.textContent = "正在保存...";
   
   try {
-    const res = await fetch("./api/update_credentials", {
+    const res = await fetchWithTimeout("./api/update_credentials", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -5531,9 +5696,8 @@ async function saveCredentials(e) {
         port: port,
         secret_path: suffix
       })
-    });
-    
-    const data = await res.json();
+    }, 25000);
+    const data = await readJsonResponse(res, "保存网页安全设置失败");
     if (res.ok && data.ok) {
       if (data.restart_needed) {
         successDiv.textContent = "保存成功！网页管理端口或路径已变更，页面将在 4 秒内自动跳转...";
@@ -5544,7 +5708,7 @@ async function saveCredentials(e) {
         
         setTimeout(() => {
           const protocol = window.location.protocol;
-          const host = window.location.hostname;
+          const host = formatUrlHost(window.location.hostname);
           window.location.href = `${protocol}//${host}:${port}/${suffix}/`;
         }, 4000);
       } else {
@@ -5588,12 +5752,12 @@ function openNetworkModal() {
   }
   
   populateRoutingCountries();
-  $("network_modal").style.display = "flex";
+  showModal("network_modal", "#net_proxy_port");
   $("admin_dropdown").style.display = "none";
 }
 
 function closeNetworkModal() {
-  $("network_modal").style.display = "none";
+  hideModal("network_modal");
 }
 
 async function saveNetwork(e) {
@@ -5637,7 +5801,7 @@ async function saveNetwork(e) {
   submitBtn.textContent = "正在保存...";
   
   try {
-    const res = await fetch("./api/update_settings", {
+    const res = await fetchWithTimeout("./api/update_settings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -5646,9 +5810,8 @@ async function saveNetwork(e) {
         force_country: forceCountry,
         routing_ip_type: routingIpType
       })
-    });
-    
-    const data = await res.json();
+    }, 25000);
+    const data = await readJsonResponse(res, "保存代理设置失败");
     if (res.ok && data.ok) {
       if (data.restart_needed) {
         successDiv.textContent = "保存成功！代理出站端口已变更，页面将在 4 秒内自动刷新...";
@@ -5685,22 +5848,24 @@ async function saveNetwork(e) {
 
 
 function openVpsModal() {
-  $("vps_recommend_modal").style.display = "flex";
+  showModal("vps_recommend_modal");
 }
 
 function closeVpsModal() {
-  $("vps_recommend_modal").style.display = "none";
+  hideModal("vps_recommend_modal");
 }
 
 async function logoutAdmin() {
   try {
-    const res = await fetch("./api/logout", { method: "POST" });
+    const res = await fetchWithTimeout("./api/logout", { method: "POST" }, 20000);
     if (res.ok) {
       window.location.reload();
+    } else {
+      alert("退出登录失败，请稍后重试");
     }
   } catch (err) {
     console.error("退出登录失败", err);
-    window.location.reload();
+    alert("退出登录失败: " + (err.message || "网络错误"));
   }
 }
 
@@ -5727,14 +5892,14 @@ let gatewayRequestInFlight = false;
 
 function openGatewayModal() {
   $("admin_dropdown").style.display = "none";
-  $("gateway_modal").style.display = "flex";
+  showModal("gateway_modal", "#btn_test_proxy");
   loadGatewayStatus();
   if (gatewayPollInterval) clearInterval(gatewayPollInterval);
   gatewayPollInterval = setInterval(loadGatewayStatus, 3000);
 }
 
 function closeGatewayModal() {
-  $("gateway_modal").style.display = "none";
+  hideModal("gateway_modal");
   if (gatewayPollInterval) {
     clearInterval(gatewayPollInterval);
     gatewayPollInterval = null;
@@ -5745,7 +5910,7 @@ async function loadGatewayStatus() {
   if (gatewayRequestInFlight || !isPageVisible() || $("gateway_modal").style.display !== "flex") return;
   gatewayRequestInFlight = true;
   try {
-    const res = await fetch("./api/gateway_status", { cache: "no-store" });
+    const res = await fetchWithTimeout("./api/gateway_status", { cache: "no-store" }, 20000);
     if (!res.ok) throw new Error(`网关状态请求失败 (${res.status})`);
     const data = await res.json();
     if (data.ok && data.services) {
@@ -5793,14 +5958,14 @@ const MAX_RENDERED_LOG_LINES = 300;
 
 function openLogsModal() {
   $("admin_dropdown").style.display = "none";
-  $("logs_modal").style.display = "flex";
+  showModal("logs_modal", "#log_filter_select");
   loadLogs();
   if (logsPollInterval) clearInterval(logsPollInterval);
   logsPollInterval = setInterval(loadLogs, 2500);
 }
 
 function closeLogsModal() {
-  $("logs_modal").style.display = "none";
+  hideModal("logs_modal");
   if (logsPollInterval) {
     clearInterval(logsPollInterval);
     logsPollInterval = null;
@@ -5811,7 +5976,7 @@ async function loadLogs() {
   if (logsRequestInFlight || !isPageVisible() || $("logs_modal").style.display !== "flex") return;
   logsRequestInFlight = true;
   try {
-    const res = await fetch("./api/logs", { cache: "no-store" });
+    const res = await fetchWithTimeout("./api/logs", { cache: "no-store" }, 20000);
     if (!res.ok) throw new Error(`日志请求失败 (${res.status})`);
     const data = await res.json();
     if (Array.isArray(data.logs)) {
@@ -6182,6 +6347,7 @@ class Handler(BaseHTTPRequestHandler):
         if not session_token:
             return False
             
+        purge_expired_sessions()
         with lock:
             exp_time = active_sessions.get(session_token)
             if exp_time is not None and exp_time > time.time():
@@ -6428,8 +6594,11 @@ class Handler(BaseHTTPRequestHandler):
                 expected_pwd = ui_cfg.get("password", "")
                 expected_uname = ui_cfg.get("username", "admin")
                 
-                if expected_pwd and input_pwd == expected_pwd and input_uname == expected_uname:
+                password_matches = bool(expected_pwd) and secrets.compare_digest(input_pwd, str(expected_pwd))
+                username_matches = secrets.compare_digest(input_uname, str(expected_uname))
+                if password_matches and username_matches:
                     token = uuid.uuid4().hex
+                    purge_expired_sessions()
                     with lock:
                         active_sessions[token] = time.time() + 30 * 24 * 3600
                     body = json.dumps({"ok": True}).encode("utf-8")
@@ -6484,7 +6653,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 payload = self.read_json_body()
                 new_username = str(payload.get("username") or "").strip()
-                new_password = str(payload.get("password") or "").strip()
+                new_password = str(payload.get("password") or "")
                 new_port = payload.get("port")
                 new_suffix = str(payload.get("secret_path") or "").strip()
                 
@@ -6716,7 +6885,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({
                         "ok": True,
                         "message": "已在后台启动节点更新流程",
-                        "running": False,
+                        "running": True,
                         "discovery_countries": discovery_countries,
                     })
             except ValueError as exc:
