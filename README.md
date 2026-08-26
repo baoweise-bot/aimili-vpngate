@@ -18,37 +18,8 @@
 
 </div>
 
-AimiliVPN 使用 Python 标准库管理 VPNGate 节点，提供节点获取与检测、连接切换、Web 管理后台，以及共用一个端口的 HTTP、HTTPS 网站代理和 SOCKS5 代理服务。
-
-| 项目 | 默认值或支持范围 |
-| --- | --- |
-| Web 管理后台 | TCP `8787` + 独立安全路径 + 账号密码 |
-| 本机代理 | `127.0.0.1:7928`，支持 HTTP、HTTPS `CONNECT` 和 SOCKS5 |
-| 源码部署 | x64、x86、ARM64、ARM32 Linux |
-| Docker 镜像 | `linux/amd64`、`linux/386`、`linux/arm64`、`linux/arm/v7` |
-| 更新通道 | GitHub `main` 正式分支 / 最新正式 Release |
-
-> [!IMPORTANT]
-> **网络可用性提示：** 不同地区、数据中心和网络服务商可能限制 DNS、VPNGate API、GitHub 镜像或 VPN 协议。镜像与本地缓存只能提高节点列表的可用性，不能保证所有机型都能建立连接。部署前请确认所在地法律和 VPS 服务商条款允许使用 VPN/TUN。
-
-<a id="quick-install"></a>
-## 快速安装
-
-使用 `root` 用户在受支持的 Linux VPS 上执行：
-
-```bash
-bash <(curl -Ls https://raw.githubusercontent.com/baoweise-bot/aimili-vpngate/main/install.sh)
-```
-
-安装完成后，终端会显示 Web 后台完整地址、随机安全路径、登录账号和密码。输入 `ml` 可打开管理菜单。
-
-> [!TIP]
-> 安装前请在 VPS 控制面板启用 TUN/TAP，并确认 `/dev/net/tun` 存在。Web 默认使用 TCP `8787`，安全组建议只允许自己的 IP 访问。
-
 <a id="vps"></a>
 ## VPS 推荐
-
-以下链接含推广参数，通过链接购买不会增加您的费用。
 
 <table>
 <tr>
@@ -85,7 +56,32 @@ bash <(curl -Ls https://raw.githubusercontent.com/baoweise-bot/aimili-vpngate/ma
 </tr>
 </table>
 
-购买前请确认具体套餐支持 TUN/TAP、OpenVPN 和所需网络协议。推广链接不代表对具体机型可用性的保证。
+AimiliVPN 使用 Python 标准库管理 VPNGate 节点，提供节点获取与检测、连接切换、Web 管理后台，以及共用一个端口的 HTTP、HTTPS 网站代理和 SOCKS5 代理服务。
+
+| 项目 | 默认值或支持范围 |
+| --- | --- |
+| Web 管理后台 | TCP `8787` + 独立安全路径 + 账号密码 |
+| 本机代理 | `127.0.0.1:7928`，支持 HTTP、HTTPS `CONNECT` 和 SOCKS5 |
+| 源码部署 | x64、x86、ARM64、ARM32 Linux |
+| Docker 镜像 | `linux/amd64`、`linux/386`、`linux/arm64`、`linux/arm/v7` |
+| 更新通道 | GitHub `main` 正式分支 / 最新正式 Release |
+
+> [!IMPORTANT]
+> **网络可用性提示：** 不同地区、数据中心和网络服务商可能限制 DNS、VPNGate API、GitHub 镜像或 VPN 协议。镜像与本地缓存只能提高节点列表的可用性，不能保证所有机型都能建立连接。部署前请确认所在地法律和 VPS 服务商条款允许使用 VPN/TUN。
+
+<a id="quick-install"></a>
+## 快速安装
+
+使用 `root` 用户在受支持的 Linux VPS 上执行：
+
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/baoweise-bot/aimili-vpngate/main/install.sh)
+```
+
+安装完成后，终端会显示 Web 后台完整地址、随机安全路径、登录账号和密码。输入 `ml` 可打开管理菜单。
+
+> [!TIP]
+> 安装前请在 VPS 控制面板启用 TUN/TAP，并确认 `/dev/net/tun` 存在。Web 默认使用 TCP `8787`，安全组建议只允许自己的 IP 访问。
 
 <a id="installation"></a>
 ## 完整安装
