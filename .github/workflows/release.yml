@@ -152,3 +152,4 @@ jobs:
             gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --title "${title}" --notes-file RELEASE_NOTES.md
           else
             gh release create "${RELEASE_TAG}" dist/* --repo "${GITHUB_REPOSITORY}" --title "${title}" --notes-file RELEASE_NOTES.md --verify-tag
+          fi
