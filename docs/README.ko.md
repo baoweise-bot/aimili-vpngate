@@ -28,7 +28,7 @@ AimiliVPN은 Python 표준 라이브러리로 VPNGate 노드를 관리하며 노
 | Docker | `linux/amd64`, `linux/386`, `linux/arm64`, `linux/arm/v7` |
 
 > [!IMPORTANT]
-> **지역별 가용성:** 중국 본토 데이터 센터의 VPS는 현지 네트워크 정책, 제공업체 제한, DNS, VPNGate API 또는 VPN 프로토콜 제한으로 인해 노드를 가져오거나 연결하지 못할 수 있습니다. 미러와 로컬 스냅샷이 있더라도 사용 가능성을 보장하지 않습니다. 이 프로젝트는 중국 본토 배포를 대상으로 하지 않습니다. 중국 본토 외부에서 현지 법률과 VPS 제공업체가 VPN/TUN을 명시적으로 허용하는 환경에서만 사용하십시오.
+> **네트워크 가용성:** 일부 지역, 데이터 센터 및 네트워크 제공업체는 DNS, VPNGate API, GitHub 미러 또는 VPN 프로토콜을 제한할 수 있습니다. 미러와 로컬 스냅샷은 노드 목록 가용성을 높이지만 모든 환경의 연결 성공을 보장하지 않습니다. 배포 전에 현지 법률과 VPS 제공업체가 VPN/TUN을 허용하는지 확인하십시오.
 
 <a id="quick-install"></a>
 ## 빠른 설치
@@ -49,12 +49,42 @@ bash <(curl -Ls https://raw.githubusercontent.com/baoweise-bot/aimili-vpngate/ma
 
 아래 링크는 제휴 링크이며, 이를 통해 구매해도 가격은 올라가지 않습니다.
 
-| 제공업체 | 적합한 용도 | 특징 | 링크 |
-| --- | --- | --- | --- |
-| **BandwagonHost** | 경로 품질, 지연 시간, 장기 안정성 중시 | 높은 국제 네트워크 품질이 필요한 환경 | [BandwagonHost](https://bandwagonhost.com/aff.php?aff=81790) |
-| **RackNerd** | 저비용 배포, 테스트, 장기 실행 | 비교적 저렴한 가격과 넉넉한 트래픽 | [RackNerd](https://my.racknerd.com/aff.php?aff=18708) |
+<table>
+<tr>
+<td width="50%" valign="top">
+<h3 align="center">BandwagonHost</h3>
+<p align="center">
+<img alt="CN2 GIA" src="https://img.shields.io/badge/China_Telecom-CN2_GIA-dc2626?style=flat-square">
+<img alt="China Unicom 9929" src="https://img.shields.io/badge/China_Unicom-9929-f97316?style=flat-square">
+<img alt="China Mobile CMIN2" src="https://img.shields.io/badge/China_Mobile-CMIN2-16a34a?style=flat-square">
+</p>
+<p><strong>주요 특징</strong></p>
+<ul>
+<li>CN2 GIA, China Unicom 9929, China Mobile CMIN2 프리미엄 최적화 회선.</li>
+<li>낮은 지연 시간, 높은 안정성, 뛰어난 국제 경로 품질.</li>
+<li>TikTok 라이브 운영, 해외 전자상거래 및 장기 글로벌 서비스에 적합한 연결 품질.</li>
+</ul>
+<p align="center"><a href="https://bandwagonhost.com/aff.php?aff=81790"><img alt="BandwagonHost" src="https://img.shields.io/badge/View-BandwagonHost-dc2626?style=for-the-badge"></a></p>
+</td>
+<td width="50%" valign="top">
+<h3 align="center">RackNerd</h3>
+<p align="center">
+<img alt="4000GB monthly traffic" src="https://img.shields.io/badge/Monthly_Traffic-4000GB-0284c7?style=flat-square">
+<img alt="High traffic" src="https://img.shields.io/badge/Advantage-High_Traffic-0ea5e9?style=flat-square">
+<img alt="Value" src="https://img.shields.io/badge/Pricing-High_Value-2563eb?style=flat-square">
+</p>
+<p><strong>주요 특징</strong></p>
+<ul>
+<li>월 4000GB의 넉넉한 트래픽.</li>
+<li>합리적인 가격과 뛰어난 트래픽 대비 비용 효율.</li>
+<li>장기 실행 서비스의 배포 비용을 낮추기 좋은 구성.</li>
+</ul>
+<p align="center"><a href="https://my.racknerd.com/aff.php?aff=18708"><img alt="RackNerd" src="https://img.shields.io/badge/View-RackNerd-0284c7?style=for-the-badge"></a></p>
+</td>
+</tr>
+</table>
 
-구매 전에 데이터 센터가 중국 본토 외부에 있고 TUN/TAP, OpenVPN 및 필요한 네트워크 프로토콜을 허용하는지 확인하십시오.
+구매 전에 선택한 요금제가 TUN/TAP, OpenVPN 및 필요한 네트워크 프로토콜을 허용하는지 확인하십시오.
 
 <a id="installation"></a>
 ## 설치
@@ -222,7 +252,7 @@ ssh -N \
 > 이 프로젝트를 다운로드, 배포 또는 사용하기 전에 사용 지역과 VPS 소재지의 법률, 제공업체 약관 및 VPNGate 규칙을 준수하는지 직접 확인해야 합니다. 이 내용은 프로젝트의 사용 범위를 설명할 뿐 법률 자문이 아니며 법적 책임의 면제를 보장하지 않습니다.
 
 1. **허용 목적:** 합법적인 네트워크 연구, 교육, 개발 테스트, 개인정보 보호 및 승인된 접속에만 사용하십시오. 법에 따라 시행되는 통제 회피, 무단 접속, 공격, 스캔, 스팸, 사기, 권리 침해 또는 기타 불법 활동에 사용해서는 안 됩니다.
-2. **지역 제한:** 중국 본토의 VPS는 VPNGate, GitHub 미러 또는 원격 VPN 노드에 접속하지 못할 수 있습니다. 이 프로젝트는 중국 본토 배포의 가용성을 약속하거나 지원하지 않으며, 중국 본토 외부에서 현지 법률이 허용하는 합리적인 사용을 대상으로 합니다.
+2. **네트워크 및 지역 제한:** 일부 지역과 데이터 센터는 VPNGate, GitHub 미러 또는 원격 VPN 노드를 제한할 수 있습니다. 이 프로젝트는 어떤 지역이나 호스트에서도 지속적인 가용성을 보장하지 않습니다. 현지 법률과 제공업체 약관이 허용하는 환경에서만 사용하십시오.
 3. **제3자 노드:** VPNGate 노드는 제3자 자원봉사자가 운영합니다. 이 프로젝트는 해당 노드를 소유, 통제 또는 감사하지 않으며 가용성, 속도, 보안, 개인정보 처리 또는 로그 기록을 보장하지 않습니다. 신뢰할 수 없는 노드로 민감한 정보를 전송하지 마십시오.
 4. **사용자 책임:** 노드 선택, 트래픽, 배포 위치, 공개 포트 및 계정 보안은 사용자의 책임입니다. 불법 사용, 잘못된 설정, 제3자 노드, 서비스 중단, 데이터 유출 또는 계정 남용에 대한 법적 책임은 사용자에게 있습니다.
 5. **무보증:** 소프트웨어는 “있는 그대로” 제공됩니다. 적용 법률이 허용하는 최대 범위에서 유지관리자는 가용성, 상품성, 특정 목적 적합성 또는 간접 손해를 보증하지 않습니다. 법적으로 제외할 수 없는 책임에는 영향을 주지 않습니다.

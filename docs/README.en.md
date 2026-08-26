@@ -29,7 +29,7 @@ AimiliVPN uses Python's standard library to manage VPNGate nodes. It provides no
 | Update channel | GitHub `main` stable branch / latest stable Release |
 
 > [!IMPORTANT]
-> **Regional availability:** VPS hosts located in mainland China may be unable to fetch nodes or establish connections because of local network policies, provider restrictions, DNS behavior, blocked VPNGate APIs, or restricted VPN protocols. Mirrors and local snapshots do not guarantee availability on such hosts. This project is not intended for deployment in mainland China. Use it only outside mainland China where local law and the VPS provider explicitly permit VPN/TUN services.
+> **Network availability:** Some regions, data centers, and network providers may restrict DNS, VPNGate APIs, GitHub mirrors, or VPN protocols. Mirrors and local snapshots improve node-list availability but cannot guarantee a successful connection on every host. Confirm that local law and your VPS provider permit VPN/TUN before deployment.
 
 <a id="quick-install"></a>
 ## Quick Install
@@ -50,12 +50,42 @@ The installer prints the complete Web URL, private path, username, and password.
 
 The following are affiliate links. Using them does not increase your price.
 
-| Provider | Best for | Highlights | Link |
-| --- | --- | --- | --- |
-| **BandwagonHost** | Route quality, latency, and long-term stability | Optimized routes for users who need higher cross-border network quality | [View BandwagonHost](https://bandwagonhost.com/aff.php?aff=81790) |
-| **RackNerd** | Low-cost deployments, testing, and long-running services | Generous traffic at a lower price | [View RackNerd](https://my.racknerd.com/aff.php?aff=18708) |
+<table>
+<tr>
+<td width="50%" valign="top">
+<h3 align="center">BandwagonHost</h3>
+<p align="center">
+<img alt="CN2 GIA" src="https://img.shields.io/badge/China_Telecom-CN2_GIA-dc2626?style=flat-square">
+<img alt="China Unicom 9929" src="https://img.shields.io/badge/China_Unicom-9929-f97316?style=flat-square">
+<img alt="China Mobile CMIN2" src="https://img.shields.io/badge/China_Mobile-CMIN2-16a34a?style=flat-square">
+</p>
+<p><strong>Highlights</strong></p>
+<ul>
+<li>Premium CN2 GIA, China Unicom 9929, and China Mobile CMIN2 optimized routes.</li>
+<li>Low latency, high stability, and excellent cross-border route quality.</li>
+<li>Strong connectivity for TikTok live operations, cross-border e-commerce, and long-running global services.</li>
+</ul>
+<p align="center"><a href="https://bandwagonhost.com/aff.php?aff=81790"><img alt="View BandwagonHost" src="https://img.shields.io/badge/View-BandwagonHost-dc2626?style=for-the-badge"></a></p>
+</td>
+<td width="50%" valign="top">
+<h3 align="center">RackNerd</h3>
+<p align="center">
+<img alt="4000GB monthly traffic" src="https://img.shields.io/badge/Monthly_Traffic-4000GB-0284c7?style=flat-square">
+<img alt="High traffic" src="https://img.shields.io/badge/Advantage-High_Traffic-0ea5e9?style=flat-square">
+<img alt="Value" src="https://img.shields.io/badge/Pricing-High_Value-2563eb?style=flat-square">
+</p>
+<p><strong>Highlights</strong></p>
+<ul>
+<li>4000GB of monthly traffic with generous transfer headroom.</li>
+<li>Affordable pricing and a strong traffic-to-cost ratio.</li>
+<li>Low deployment cost for services that need to run continuously.</li>
+</ul>
+<p align="center"><a href="https://my.racknerd.com/aff.php?aff=18708"><img alt="View RackNerd" src="https://img.shields.io/badge/View-RackNerd-0284c7?style=for-the-badge"></a></p>
+</td>
+</tr>
+</table>
 
-Before purchasing, confirm that the data center is outside mainland China and that the plan permits TUN/TAP, OpenVPN, and the required network protocols. An affiliate link is not a guarantee that a specific plan will work.
+Before purchasing, confirm that the selected plan permits TUN/TAP, OpenVPN, and the required network protocols. An affiliate link is not a guarantee that a specific plan will work.
 
 <a id="installation"></a>
 ## Installation
@@ -227,7 +257,7 @@ After the tunnel is established:
 > By downloading, deploying, or using this project, you are responsible for confirming compliance with the laws of your location, the laws where the VPS is hosted, provider terms, and applicable VPNGate rules. This section defines project boundaries, is not legal advice, and cannot guarantee exemption from any liability imposed by law.
 
 1. **Permitted purpose:** Use only for lawful network research, education, development testing, privacy protection, and authorized access. Do not use it to evade lawfully imposed controls, gain unauthorized access, attack or scan systems, send spam, commit fraud, infringe rights, or conduct any unlawful activity.
-2. **Regional restriction:** VPS hosts in mainland China may be unable to access VPNGate, GitHub mirrors, or remote VPN nodes. The project does not promise or support availability for deployment in mainland China. It is intended for reasonable use by users outside mainland China where local law permits.
+2. **Network and regional restrictions:** Some regions and data centers may restrict VPNGate, GitHub mirrors, or remote VPN nodes. The project does not guarantee continuous availability in any region or on any host. Use it only where local law and provider terms permit.
 3. **Third-party nodes:** VPNGate nodes are operated by third-party volunteers. This project does not own, control, or audit them and cannot guarantee availability, speed, security, privacy practices, or logging behavior. Do not send passwords, financial information, trade secrets, or other sensitive data through untrusted nodes.
 4. **User responsibility:** The user is responsible for node selection, traffic, deployment location, exposed ports, and account security, and bears legal responsibility for unlawful use, misconfiguration, third-party nodes, outages, data leaks, or account abuse.
 5. **No warranty:** The software is provided “as is.” To the maximum extent permitted by applicable law, maintainers disclaim warranties of availability, merchantability, fitness for a particular purpose, and indirect damages. Liability that cannot lawfully be excluded remains unaffected.

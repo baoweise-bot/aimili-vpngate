@@ -29,7 +29,7 @@ AimiliVPN 使用 Python 标准库管理 VPNGate 节点，提供节点获取与�
 | 更新通道 | GitHub `main` 正式分支 / 最新正式 Release |
 
 > [!IMPORTANT]
-> **地区可用性提示：** 中国大陆境内数据中心的 VPS 可能因当地网络政策、服务商限制、DNS、VPNGate API 或 VPN 协议受限而无法获取节点或建立连接。即使程序提供镜像和本地缓存，也不保证此类机型可用。本项目不面向中国大陆境内部署，建议仅在中国大陆境外、当地法律允许且 VPS 服务商明确允许 VPN/TUN 的环境中合理使用。
+> **网络可用性提示：** 不同地区、数据中心和网络服务商可能限制 DNS、VPNGate API、GitHub 镜像或 VPN 协议。镜像与本地缓存只能提高节点列表的可用性，不能保证所有机型都能建立连接。部署前请确认所在地法律和 VPS 服务商条款允许使用 VPN/TUN。
 
 <a id="quick-install"></a>
 ## 快速安装
@@ -50,12 +50,42 @@ bash <(curl -Ls https://raw.githubusercontent.com/baoweise-bot/aimili-vpngate/ma
 
 以下链接含推广参数，通过链接购买不会增加您的费用。
 
-| 推荐 | 更适合 | 主要特点 | 入口 |
-| --- | --- | --- | --- |
-| **BandwagonHost 搬瓦工** | 重视国内访问质量、延迟和线路稳定性 | 三网优化线路，适合对跨境网络质量要求较高的长期使用场景 | [查看 BandwagonHost](https://bandwagonhost.com/aff.php?aff=81790) |
-| **RackNerd** | 低成本部署、测试和长期挂机 | 流量充足、价格较低，适合入门部署和性价比优先的 VPS | [查看 RackNerd](https://my.racknerd.com/aff.php?aff=18708) |
+<table>
+<tr>
+<td width="50%" valign="top">
+<h3 align="center">BandwagonHost 搬瓦工</h3>
+<p align="center">
+<img alt="CN2 GIA" src="https://img.shields.io/badge/电信-CN2_GIA-dc2626?style=flat-square">
+<img alt="联通 9929" src="https://img.shields.io/badge/联通-9929-f97316?style=flat-square">
+<img alt="移动 CMIN2" src="https://img.shields.io/badge/移动-CMIN2-16a34a?style=flat-square">
+</p>
+<p><strong>主要特点</strong></p>
+<ul>
+<li>电信 CN2 GIA、联通 9929、移动 CMIN2 等三网极品优化线路。</li>
+<li>低延迟、高稳定性，跨境链路质量出色。</li>
+<li>适合 TikTok 直播运营、海外带货和长期出海业务。</li>
+</ul>
+<p align="center"><a href="https://bandwagonhost.com/aff.php?aff=81790"><img alt="查看 BandwagonHost" src="https://img.shields.io/badge/立即查看-BandwagonHost-dc2626?style=for-the-badge"></a></p>
+</td>
+<td width="50%" valign="top">
+<h3 align="center">RackNerd</h3>
+<p align="center">
+<img alt="4000GB 每月流量" src="https://img.shields.io/badge/每月流量-4000GB-0284c7?style=flat-square">
+<img alt="大流量" src="https://img.shields.io/badge/优势-大流量-0ea5e9?style=flat-square">
+<img alt="高性价比" src="https://img.shields.io/badge/价格-高性价比-2563eb?style=flat-square">
+</p>
+<p><strong>主要特点</strong></p>
+<ul>
+<li>每月 4000GB 大流量，流量余量更充足。</li>
+<li>价格实惠，流量与配置的性价比突出。</li>
+<li>部署成本低，适合需要长期稳定运行的服务。</li>
+</ul>
+<p align="center"><a href="https://my.racknerd.com/aff.php?aff=18708"><img alt="查看 RackNerd" src="https://img.shields.io/badge/立即查看-RackNerd-0284c7?style=for-the-badge"></a></p>
+</td>
+</tr>
+</table>
 
-购买前请确认机房位于中国大陆境外，并确认套餐支持 TUN/TAP、OpenVPN 和所需网络协议。推广链接不代表对具体机型可用性的保证。
+购买前请确认具体套餐支持 TUN/TAP、OpenVPN 和所需网络协议。推广链接不代表对具体机型可用性的保证。
 
 <a id="installation"></a>
 ## 完整安装
@@ -250,7 +280,7 @@ ssh -N \
 > 下载、部署或使用本项目即表示您应自行确认用途符合所在地法律、VPS 所在地法律、网络服务商条款及 VPNGate 的相关规则。以下内容是项目使用边界，不构成法律意见，也不能保证免除任何个人或组织依法应承担的责任。
 
 1. **限定用途**：本项目仅用于合法的网络研究、教育、开发测试、隐私保护和经授权的网络访问，不得用于绕过依法实施的监管措施、未授权访问、攻击、扫描、垃圾信息、欺诈、侵权或其他违法活动。
-2. **地区限制**：中国大陆境内 VPS 可能无法访问 VPNGate、GitHub 镜像或远端 VPN 节点。本项目不承诺也不提供中国大陆境内部署可用性支持，建议仅由中国大陆境外用户在当地法律允许的环境中合理使用。
+2. **网络与地区限制**：不同地区和数据中心可能限制 VPNGate、GitHub 镜像或远端 VPN 节点。本项目不承诺任何地区或机型始终可用；仅应在当地法律和服务商条款允许的环境中合理使用。
 3. **第三方节点**：VPNGate 节点由第三方志愿者运营，本项目不拥有、不控制也不审核这些节点，无法保证其稳定性、速度、安全性、隐私政策或日志行为。请勿通过不可信节点传输账号密码、金融信息、商业机密等敏感数据。
 4. **用户责任**：节点选择、流量内容、部署位置、端口开放和账号安全均由使用者负责。因违法使用、配置不当、第三方节点、服务中断、数据泄露或账号滥用产生的后果，由使用者依法承担。
 5. **无保证提供**：软件按“现状”提供，在适用法律允许的最大范围内，维护者不对可用性、适销性、特定用途适用性或间接损失作出保证。无法依法排除的责任不受本声明影响。
