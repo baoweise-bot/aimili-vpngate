@@ -1,35 +1,51 @@
-# AimiliVPN V2.1.2 正式版
+# AimiliVPN V2.1.3 正式版
 
-V2.1.2 重点修复 IP 类型误判和部分 VPS 获取节点列表等待过久的问题，并增强 GitHub Pages、VPS 最近缓存和程序内置快照的回退体验。
+V2.1.3 是一次完整的稳定性、安全性和节点识别修复版本。重点解决节点切换期间状态显示过早、未知网络误判住宅、部分 VPS 节点源回退不合理，以及安装卸载残留等问题。
 
-## Bug 修复
+## IP 类型识别
 
-- 修复把 `proxy=true` 直接等同于机房 IP 的分类错误。住宅宽带用户运行 VPNGate 后可能被风险库标记为代理，但其网络归属仍然是住宅；现在代理属性与住宅/移动/机房类型分开保存。
-- 修复 Sony、Korea Telecom、JCOM、SK Broadband、KDDI、Cable TV 等消费宽带节点容易被误标为机房 IP 的问题。
-- 保留对真实机房网络的识别：`hosting=true` 仍直接判为机房；SoftEther、hosting、cloud、server、data center、VPS 等明确数据中心供应商特征也仍判为机房。
-- 修复升级后旧版错误 IP 分类缓存继续生效最多 7 天的问题。分类缓存加入版本号，V2.1.2 会自动重新检测旧缓存，不需要用户手动删除运行数据。
-- 修复只给少量连通性检测成功节点补充 IP 类型、节点表中大部分节点长期显示未知的问题。后台任务现在会批量补全整个节点列表，同时只合并运营商和分类字段，不覆盖连接、延迟或检测状态。
-- 修复 VPNGate 官方接口持续缓慢传输时可能突破原有 socket 超时、拖慢备用源切换的问题。每个网络节点源现在增加 6 秒总时限。
-- 修复官方 HTTPS 已超过总时限后仍继续等待同一主机 HTTP 的重复慢请求；超时后会直接尝试 GitHub Pages HTTPS。证书或 TLS 不兼容等非超时错误仍保留 HTTP 回退，兼容旧系统和不同 VPS 环境。
+- IP 类型缓存升级到新的分类版本，旧分类会自动失效并重新检测。
+- 明确区分住宅、移动、机房和未知网络，并显示高、中、低置信度及情报来源。
+- Sony、KDDI、SoftBank、Korea Telecom 等有明确消费接入运营商信息且未命中机房特征的网络继续识别为住宅。
+- `proxy + 数据中心关键词` 冲突节点以及完全缺少运营商信息的节点会调用 `ipapi.is` 进行第二来源复核。
+- 第二来源不可用或证据不足时标记为未知/低置信度，不再直接当作住宅。
+- 严格住宅路由只接受中、高置信度住宅或移动网络，拒绝未知和低置信度分类。
 
-## 节点源与镜像优化
+## 节点获取与连接切换
 
-- 节点顺序保持为：VPNGate 官方 HTTPS、官方 HTTP、GitHub Pages HTTPS、GitHub Pages HTTP、VPS 最近有效缓存、程序内置初始快照。
-- GitHub Pages 定时同步从整刻 15 分钟调整为每小时第 7、22、37、52 分钟，降低 GitHub Actions 高峰期调度延迟概率。
-- GitHub Pages 与官方 HTTPS 获取到的快照继续执行相同的 CSV 字段、大小、Base64 和 OpenVPN 危险指令校验。
-- HTTP 节点源继续只作为兼容回退，不覆盖最后一次通过 HTTPS 获得的可信本地快照。
+- 修复官方 HTTPS 超时后直接跳过官方 HTTP 的问题；现在仍会继续尝试 VPNGate 官方真实 HTTP，再进入 GitHub Pages、VPS 最近缓存和内置快照。
+- GitHub 镜像状态显示生成时间与陈旧程度，HTTP 地址明确标注为跳转 HTTPS，不再描述成独立明文镜像。
+- 连接状态拆分为隧道就绪和代理出口就绪；只有 OpenVPN、策略路由与真实代理出口全部通过后，前端才显示“已连接”。
+- 修复批量节点检测失败时用空字段覆盖已有 ISP、物理位置和 IP 类型的问题。
+- 固定国家统一保存 ISO 两字母代码，并兼容旧版中文国家名称配置。
+- 物理位置国旗使用 IP 情报源国家，节点申报国家与 IP 推测位置分开提示，避免来源冲突造成误解。
 
-## 验证结果
+## 安装、安全与运维
 
-- 40 项单元测试通过，覆盖住宅/代理分离、真实机房识别、旧缓存迁移、后台全量富化、连接状态保护和慢速官方源回退。
-- Python 编译、前端 JavaScript 语法、`install.sh` 语法和 Docker Compose 配置检查通过。
-- 测试 VPS 上 VPNGate 官方 HTTPS/HTTP、GitHub Pages HTTPS/HTTP、VPS 最近缓存和内置快照均能下载、解析并生成候选节点。
-- 发布流水线对 Python 3.9、3.11、3.13 运行完整测试，并分别构建验证 `linux/amd64`、`linux/386`、`linux/arm64`、`linux/arm/v7`。
+- 卸载时清理 AimiliVPN 的 sysctl 文件、table 100 路由和全部 table 100 策略规则。
+- `ui_auth.json` 创建、迁移和保存时使用私有权限 `0600`，并采用安全写入流程。
+- Web 管理端口与代理端口增加双向冲突校验，冲突配置直接拒绝，不再静默改写端口。
+- OpenVPN 启用 `remote-cert-tls server`，验证服务器证书用途并移除相关安全警告。
+- 新增 `AIMILIVPN_NONINTERACTIVE=1` 无人值守安装模式，首次部署不会停在交互提示。
+- 安装完成信息只显示实际默认监听的 IPv4 本地代理地址，不再错误提示未启用的 IPv6 地址。
+
+## 验证与兼容性
+
+- 本地 Python 单元测试 51/51 通过，Python 编译、Dashboard JavaScript 语法、安装脚本语法和补丁格式检查通过。
+- Ubuntu 22.04 x86_64 VPS 已完成真实卸载、重新安装、节点源、连接切换、代理出口、Web API、权限和路由残留验证。
+- 发布流水线会在 Python 3.9、3.11、3.13 上运行完整测试。
+- Docker 会分别构建验证 `linux/amd64`、`linux/386`、`linux/arm64`、`linux/arm/v7`，并发布统一多架构镜像清单。
+
+## 平台限制
+
+- GitHub Actions 定时任务由 GitHub 调度，不保证每 15 分钟准点运行。
+- GitHub Pages 会把 HTTP 强制跳转到 HTTPS，不能作为真正的明文 HTTP 镜像。
+- 程序保留 VPNGate 官方 HTTP、VPS 最近有效缓存和内置初始快照，以降低上述平台限制的影响。
 
 ## 下载与更新
 
-- GitHub Release 提供 `aimilivpn-v2.1.2-linux-source.tar.gz` 和 `sha256sums.txt`。
-- GHCR 发布 `2.1.2`、`2.1`、`latest` 三组镜像标签。
+- GitHub Release：`aimilivpn-v2.1.3-linux-source.tar.gz` 和 `sha256sums.txt`。
+- GHCR：`2.1.3`、`2.1`、`latest` 多架构镜像标签。
 
 Python 源码安装更新：
 

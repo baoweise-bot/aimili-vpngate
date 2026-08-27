@@ -804,8 +804,8 @@ class ManagerLogicTests(unittest.TestCase):
         self.assertEqual(519, entries[-1]["index"])
 
     def test_web_update_controls_only_expose_stable_main_channel(self) -> None:
-        self.assertEqual("2.1.2", manager.APP_VERSION)
-        self.assertEqual("V2.1.2 正式版", manager.APP_VERSION_LABEL)
+        self.assertEqual("2.1.3", manager.APP_VERSION)
+        self.assertEqual("V2.1.3 正式版", manager.APP_VERSION_LABEL)
         self.assertIn("检测更新", manager.INDEX_HTML)
         self.assertIn("/api/check_update", manager.INDEX_HTML)
         self.assertIn("/tree/main", manager.INDEX_HTML)
@@ -850,7 +850,7 @@ class ManagerLogicTests(unittest.TestCase):
     def test_release_workflow_uses_full_patch_version(self) -> None:
         workflow_text = (manager.ROOT_DIR / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
-        self.assertIn("default: v2.1.2", workflow_text)
+        self.assertIn("default: v2.1.3", workflow_text)
         self.assertIn("AimiliVPN V$(tr -d '\\r\\n' < VERSION) 正式版", workflow_text)
         self.assertNotIn("cut -d. -f1,2 VERSION", workflow_text)
 
@@ -877,8 +877,8 @@ class ManagerLogicTests(unittest.TestCase):
 
     def test_latest_release_check_reports_current_formal_version(self) -> None:
         release = {
-            "tag_name": "v2.1.2",
-            "name": "AimiliVPN V2.1.2 正式版",
+            "tag_name": "v2.1.3",
+            "name": "AimiliVPN V2.1.3 正式版",
             "draft": False,
             "prerelease": False,
         }
@@ -886,7 +886,7 @@ class ManagerLogicTests(unittest.TestCase):
             result = manager.check_latest_release()
 
         self.assertFalse(result["update_available"])
-        self.assertEqual("V2.1.2 正式版", result["current_version_label"])
+        self.assertEqual("V2.1.3 正式版", result["current_version_label"])
 
     def test_latest_release_check_reports_source_update_command(self) -> None:
         release = {"tag_name": "v2.2.0", "draft": False, "prerelease": False}
