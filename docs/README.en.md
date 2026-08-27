@@ -104,6 +104,12 @@ bash <(curl -Ls https://raw.githubusercontent.com/baoweise-bot/aimili-vpngate/ma
 
 The installer deploys to `/opt/aimilivpn` and registers a system service.
 
+For unattended installation, explicitly skip the first-run prompts and generate the Web path and credentials automatically:
+
+```bash
+AIMILIVPN_NONINTERACTIVE=1 bash <(curl -Ls https://raw.githubusercontent.com/baoweise-bot/aimili-vpngate/main/install.sh)
+```
+
 ```bash
 ml                 # Open the management menu
 ml status          # Show status, Web URL, and username

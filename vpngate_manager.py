@@ -88,6 +88,12 @@ def bounded_int(value: Any, default: int, min_value: int | None = None, max_valu
         return default
     return parsed
 
+def ports_conflict(web_port: Any, proxy_port: Any) -> bool:
+    try:
+        return int(web_port) == int(proxy_port)
+    except (TypeError, ValueError):
+        return False
+
 API_HTTPS_URL = os.environ.get("VPNGATE_API_HTTPS_URL", "https://www.vpngate.net/api/iphone/").strip()
 API_HTTP_URL = os.environ.get("VPNGATE_API_HTTP_URL", "http://www.vpngate.net/api/iphone/").strip()
 MIRROR_HTTPS_URL = os.environ.get(
@@ -97,6 +103,10 @@ MIRROR_HTTPS_URL = os.environ.get(
 MIRROR_HTTP_URL = os.environ.get(
     "VPNGATE_MIRROR_HTTP_URL",
     "http://baoweise-bot.github.io/aimili-vpngate/vpngate.csv",
+).strip()
+MIRROR_META_URL = os.environ.get(
+    "VPNGATE_MIRROR_META_URL",
+    "https://baoweise-bot.github.io/aimili-vpngate/vpngate.meta.json",
 ).strip()
 # Kept as the primary URL for diagnostics and backwards-compatible state output.
 API_URL = API_HTTPS_URL
@@ -189,6 +199,9 @@ IP_ENRICHMENT_FIELDS = (
     "is_hosting",
     "is_mobile",
     "ip_type_reason",
+    "ip_type_confidence",
+    "ip_type_sources",
+    "geo_country_short",
 )
 
 class ConnectionCancelled(RuntimeError):
@@ -238,7 +251,17 @@ def write_json(path: Path, data: Any) -> None:
     with lock:
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        if path.name == "ui_auth.json":
+            try:
+                tmp.chmod(0o600)
+            except OSError:
+                pass
         tmp.replace(path)
+        if path.name == "ui_auth.json":
+            try:
+                path.chmod(0o600)
+            except OSError:
+                pass
 
 def read_json(path: Path, default: Any) -> Any:
     with lock:
@@ -310,6 +333,10 @@ def load_ui_config() -> dict[str, Any]:
         }
         updated = False
         if auth_file.exists():
+            try:
+                auth_file.chmod(0o600)
+            except OSError:
+                pass
             try:
                 data = json.loads(auth_file.read_text(encoding="utf-8"))
                 for key, val in data.items():
@@ -482,6 +509,8 @@ def get_state() -> dict[str, Any]:
     state.setdefault("last_fetch_status", "not_started")
     state.setdefault("last_check_message", "")
     state.setdefault("pending_node_id", "")
+    state.setdefault("tunnel_ready", False)
+    state.setdefault("proxy_ready", bool(state.get("proxy_ok", False)))
     state.setdefault("blacklisted_nodes", 0)
     state["app_version"] = APP_VERSION
     state["app_version_label"] = APP_VERSION_LABEL
@@ -523,6 +552,8 @@ def clear_active_connection_state(message: str) -> None:
         pending_node_id="",
         active_node_latency="无活动连接",
         proxy_ok=False,
+        tunnel_ready=False,
+        proxy_ready=False,
         proxy_ip="-",
         proxy_latency_ms=0,
         proxy_error=message,
@@ -949,7 +980,7 @@ def api_network_sources() -> list[tuple[str, str]]:
         ("official_https", API_HTTPS_URL),
         ("official_http", API_HTTP_URL),
         ("github_pages_https", MIRROR_HTTPS_URL),
-        ("github_pages_http", MIRROR_HTTP_URL),
+        ("github_pages_http_redirect_https", MIRROR_HTTP_URL),
     ]
     sources: list[tuple[str, str]] = []
     seen: set[str] = set()
@@ -988,6 +1019,25 @@ def cache_api_snapshot(text: str, source: str) -> None:
                 "sha256": hashlib.sha256(encoded).hexdigest(),
             },
         )
+
+def read_mirror_freshness() -> tuple[float, str]:
+    if not MIRROR_META_URL:
+        return 0.0, ""
+    try:
+        raw = fetch_api_text_with_deadline(MIRROR_META_URL, True, deadline_seconds=2)
+        meta = json.loads(raw)
+        generated_at = float(meta.get("generated_at", 0) or 0)
+        if generated_at <= 0:
+            return 0.0, ""
+        age_seconds = max(0, int(time.time() - generated_at))
+        if age_seconds < 3600:
+            age_text = f"{max(1, age_seconds // 60)} 分钟"
+        else:
+            age_text = f"{age_seconds / 3600:.1f} 小时"
+        return generated_at, f"镜像生成于 {age_text}前"
+    except Exception as exc:
+        print(f"[镜像元数据] 读取失败: {exc}", flush=True)
+        return 0.0, "镜像生成时间未知"
 
 def rows_to_candidates(
     rows: list[dict[str, str]],
@@ -1033,17 +1083,9 @@ def fetch_candidates() -> list[dict[str, Any]]:
         load_ui_config().get("discovery_countries")
     )
     last_err: Exception | None = None
-    deadline_hosts: set[str] = set()
-
     log_to_json("INFO", "Main", "开始按官方、GitHub Pages、本地缓存顺序拉取节点列表...")
 
     for source_name, url in api_network_sources():
-        source_host = (urllib.parse.urlsplit(url).hostname or "").lower()
-        if url.startswith("http://") and source_host in deadline_hosts:
-            msg = f"跳过同主机慢速 HTTP 节点源 {source_name}: {url}"
-            print(f"[fetch_candidates] {msg}", flush=True)
-            log_to_json("WARNING", "Main", msg)
-            continue
         try:
             msg = f"尝试节点源 {source_name}: {url}"
             print(f"[fetch_candidates] {msg}", flush=True)
@@ -1068,14 +1110,21 @@ def fetch_candidates() -> list[dict[str, Any]]:
                 if discovery_countries
                 else f"保留全部 {len(filtered_candidates)} 个"
             )
+            mirror_generated_at = 0.0
+            mirror_freshness = ""
+            if source_name.startswith("github_pages"):
+                mirror_generated_at, mirror_freshness = read_mirror_freshness()
+            source_note = f"，{mirror_freshness}" if mirror_freshness else ""
 
             set_state(
                 last_fetch_at=time.time(),
                 last_fetch_status="ok",
                 last_fetch_source=source_name,
                 last_fetch_message=(
-                    f"从 {source_name} 成功获取 {len(candidates)} 个候选节点，{scope_message}。"
+                    f"从 {source_name} 成功获取 {len(candidates)} 个候选节点，{scope_message}{source_note}。"
                 ),
+                mirror_generated_at=mirror_generated_at,
+                mirror_freshness=mirror_freshness,
                 blacklisted_nodes=len(blacklist),
             )
             log_to_json(
@@ -1086,8 +1135,6 @@ def fetch_candidates() -> list[dict[str, Any]]:
             return filtered_candidates
         except Exception as e:
             last_err = e
-            if isinstance(e, SourceDeadlineExceeded) and url.startswith("https://"):
-                deadline_hosts.add(source_host)
             print(f"[fetch_candidates] 节点源 {source_name} 失败: {e}", flush=True)
             log_to_json("WARNING", "Main", f"节点源 {source_name} 失败: {e}")
 
@@ -1201,6 +1248,8 @@ def openvpn_command(config_file: str, route_nopull: bool, dev: str = "tun0") -> 
             "--auth-user-pass",
             str(AUTH_FILE),
             "--auth-nocache",
+            "--remote-cert-tls",
+            "server",
         ]
     )
     
@@ -1559,6 +1608,17 @@ def stop_active_openvpn() -> None:
 def active_openvpn_running() -> bool:
     return active_openvpn_process is not None and active_openvpn_process.poll() is None
 
+def connection_ready_for_ui(state: dict[str, Any] | None = None) -> bool:
+    current = get_state() if state is None else state
+    return bool(
+        active_openvpn_node_id
+        and active_openvpn_running()
+        and current.get("tunnel_ready")
+        and current.get("proxy_ready")
+        and current.get("proxy_ok")
+        and not current.get("is_connecting")
+    )
+
 def sort_all_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     available_nodes = sorted(
         [n for n in nodes if n.get("probe_status") == "available" or n.get("active")],
@@ -1634,7 +1694,7 @@ def apply_routing_filters(
     if routing_mode == "fixed_region" and target_country:
         candidates = [
             n for n in candidates
-            if country_matches(n.get("country"), target_country)
+            if country_matches(n.get("country"), target_country, n.get("country_short"))
         ]
     elif routing_mode == "favorites":
         fav_ids = set(ui_cfg.get("favorite_node_ids", []))
@@ -1644,7 +1704,10 @@ def apply_routing_filters(
     if routing_ip_type == "residential":
         candidates = [
             n for n in candidates
-            if n.get("ip_type") in ("residential", "mobile")
+            if (
+                n.get("ip_type") in ("residential", "mobile")
+                and n.get("ip_type_confidence") in ("medium", "high")
+            )
             or (include_unknown_ip_type and not n.get("ip_type"))
         ]
     elif routing_ip_type == "hosting":
@@ -1660,8 +1723,34 @@ def normalized_country_name(country: Any) -> str:
     value = str(country or "").strip()
     return vpn_utils.COUNTRY_TRANSLATIONS.get(value, value)
 
-def country_matches(node_country: Any, target_country: Any) -> bool:
-    return bool(target_country) and normalized_country_name(node_country) == normalized_country_name(target_country)
+def normalize_routing_country(value: Any, nodes: list[dict[str, Any]] | None = None) -> str:
+    target = str(value or "").strip()
+    if not target:
+        return ""
+    upper = target.upper()
+    if re.fullmatch(r"[A-Z]{2}", upper):
+        return upper
+    normalized_target = normalized_country_name(target).casefold()
+    for node in nodes if nodes is not None else read_nodes():
+        code = str(node.get("country_short") or "").strip().upper()
+        if not re.fullmatch(r"[A-Z]{2}", code):
+            continue
+        if normalized_country_name(node.get("country")).casefold() == normalized_target:
+            return code
+    return target
+
+def country_matches(
+    node_country: Any,
+    target_country: Any,
+    node_country_short: Any = "",
+) -> bool:
+    target = str(target_country or "").strip()
+    if not target:
+        return False
+    target_upper = target.upper()
+    if re.fullmatch(r"[A-Z]{2}", target_upper):
+        return str(node_country_short or "").strip().upper() == target_upper
+    return normalized_country_name(node_country).casefold() == normalized_country_name(target).casefold()
 
 def probe_priority_key(node: dict[str, Any]) -> tuple[int, int, int, int]:
     ping = parse_int(node.get("ping")) or 999999
@@ -1687,7 +1776,7 @@ def validate_node_allowed_by_routing(node: dict[str, Any], ui_cfg: dict[str, Any
 
     if routing_mode == "fixed_region":
         target_country = ui_cfg.get("force_country", "")
-        if target_country and not country_matches(node.get("country"), target_country):
+        if target_country and not country_matches(node.get("country"), target_country, node.get("country_short")):
             raise RuntimeError(f"当前已锁定国家【{target_country}】，不能连接其他国家节点")
     elif routing_mode == "favorites":
         fav_ids = set(ui_cfg.get("favorite_node_ids", []))
@@ -1838,12 +1927,10 @@ def test_node_by_id(node_id: str) -> dict[str, Any]:
             node["probe_message"] = message
             node["probed_at"] = time.time()
             if ok:
-                node["owner"] = temp_node["owner"]
-                node["asn"] = temp_node["asn"]
-                node["as_name"] = temp_node["as_name"]
-                node["location"] = temp_node["location"]
-                node["ip_type"] = temp_node["ip_type"]
-                node["quality"] = temp_node["quality"]
+                for field in IP_ENRICHMENT_FIELDS:
+                    value = temp_node.get(field)
+                    if value not in (None, ""):
+                        node[field] = value
             
             sorted_nodes = sort_all_nodes(nodes)
             write_json(NODES_FILE, sorted_nodes)
@@ -1890,12 +1977,6 @@ def test_multiple_nodes(node_ids: list[str], target_available: int | None = None
                 "probe_status": "unavailable",
                 "probe_message": f"Failed to write configuration: {e}",
                 "probed_at": time.time(),
-                "owner": "",
-                "asn": "",
-                "as_name": "",
-                "location": "",
-                "ip_type": "",
-                "quality": "",
             }
             
         latency = vpn_utils.ping_latency_ms(h, p, fallback_ping)
@@ -1922,12 +2003,6 @@ def test_multiple_nodes(node_ids: list[str], target_available: int | None = None
             "probe_status": "available" if ok else "unavailable",
             "probe_message": message,
             "probed_at": time.time(),
-            "owner": "",
-            "asn": "",
-            "as_name": "",
-            "location": "",
-            "ip_type": "",
-            "quality": "",
         }
         return temp_node
 
@@ -2133,6 +2208,9 @@ def connect_node(node_id: str) -> str:
         set_state(
             is_connecting=True,
             pending_node_id=node_id,
+            tunnel_ready=False,
+            proxy_ready=False,
+            proxy_ok=False,
             active_node_latency="正在连接",
             last_check_message=f"正在初始化连接配置: {node_id}",
         )
@@ -2238,6 +2316,7 @@ def connect_node(node_id: str) -> str:
                 raise ConnectionCancelled("连接操作已取消")
             active_openvpn_process = process
             active_openvpn_node_id = node_id
+        set_state(tunnel_ready=True, proxy_ready=False)
         
         set_state(active_node_latency="配置路由", last_check_message="正在配置策略路由规则与流量转发...")
         routing_ready = setup_policy_routing("tun0")
@@ -2295,6 +2374,8 @@ def connect_node(node_id: str) -> str:
                 last_check_message=f"Connected {node_id}",
                 active_node_latency=latency_str,
                 proxy_ok=True,
+                tunnel_ready=True,
+                proxy_ready=True,
                 proxy_ip=res["ip"],
                 proxy_latency_ms=res["latency_ms"],
                 proxy_error="",
@@ -4658,9 +4739,11 @@ const translateQuality = q => {
 };
 
 const translateIpType = t => {
-  const dict = {"residential": "住宅 IP", "hosting": "机房 IP", "mobile": "移动网", "proxy": "代理 IP"};
+  const dict = {"residential": "住宅 IP", "hosting": "机房 IP", "mobile": "移动网", "unknown": "未知", "proxy": "代理 IP"};
   return dict[t] || t || "-";
 };
+
+const translateConfidence = value => ({high: "高", medium: "中", low: "低"}[value] || "未知");
 
 const translateCountry = c => {
   const dict = {
@@ -4922,8 +5005,7 @@ function render(){
     $("deployment_mode_label").textContent = `${modeLabel}部署 · 更新通道：main`;
   }
 
-  const activeNodeId = state.active_openvpn_node_id;
-  const activeNode = nodes.find(n => n && (n.active || n.id === activeNodeId));
+  const activeNode = nodes.find(n => n && n.active);
   
   // Render separated Active Node Card
   const activeCardContainer = $("active_node_card");
@@ -4953,7 +5035,9 @@ function render(){
   } else if (activeNode) {
     const latencyText = nodeLatencyHtml(activeNode);
     const displayLocation = activeNode.location || translateCountry(activeNode.country) || "-";
-    const activeFlag = countryFlag(activeNode.country_short);
+    const declaredFlag = countryFlag(activeNode.country_short);
+    const locationFlag = countryFlag(activeNode.geo_country_short || activeNode.country_short);
+    const ipTypeTitle = `${translateIpType(activeNode.ip_type)} · 置信度：${translateConfidence(activeNode.ip_type_confidence)} · 来源：${(activeNode.ip_type_sources || []).join(" + ") || "未知"}`;
     activeCardHtml = `
       <div class="active-card">
         <div class="active-card-info">
@@ -4963,16 +5047,16 @@ function render(){
           <div class="active-card-details">
             <div class="active-card-title">
               <span class="badge available"><span class="badge-pulse"></span>已连接</span>
-              <strong>${esc(translateCountry(activeNode.country))} 节点</strong>
+              <strong>${declaredFlag ? `${esc(declaredFlag)} ` : ""}${esc(translateCountry(activeNode.country))} 节点</strong>
             </div>
             <div class="active-card-value mono" style="font-size: 20px; margin-top: 2px;">
               ${esc(activeNode.ip || activeNode.remote_host)}:${activeNode.remote_port || ""}
             </div>
             <div class="active-card-meta" style="margin-top: 4px;">
-              <span>物理位置: <strong>${activeFlag ? `${esc(activeFlag)} ` : ""}${esc(displayLocation)}</strong></span>
+              <span title="IP 情报源推测位置；节点申报国家见标题">物理位置: <strong>${locationFlag ? `${esc(locationFlag)} ` : ""}${esc(displayLocation)}</strong></span>
               <span style="margin-left: 12px;">延时: <strong>${latencyText}</strong></span>
               <span style="margin-left: 12px;">运营主体: <strong>${esc(activeNode.owner || activeNode.as_name || "-")}</strong></span>
-              <span style="margin-left: 12px;">IP 类型: <strong>${esc(translateIpType(activeNode.ip_type))}</strong></span>
+              <span style="margin-left: 12px;" title="${esc(ipTypeTitle)}">IP 类型: <strong>${esc(translateIpType(activeNode.ip_type))}</strong></span>
             </div>
           </div>
         </div>
@@ -5091,7 +5175,11 @@ function render(){
       const badgeText = isCurrentlyActive ? '<span class="badge-pulse"></span>已连接' : (isPending ? '<span class="badge-pulse"></span>切换中' : translateStatus(n.probe_status));
       const latencyText = nodeLatencyHtml(n);
       const displayLocation = n.location || translateCountry(n.country) || "-";
-      const flag = countryFlag(n.country_short);
+      const flag = countryFlag(n.geo_country_short || n.country_short);
+      const locationTitle = n.location
+        ? `IP 推测位置：${displayLocation}；节点申报国家：${translateCountry(n.country)}`
+        : `节点申报国家：${translateCountry(n.country)}`;
+      const ipTypeTitle = `${translateIpType(n.ip_type)} · 置信度：${translateConfidence(n.ip_type_confidence)} · 来源：${(n.ip_type_sources || []).join(" + ") || "未知"}`;
       
       const isTesting = testingNodeIds.has(n.id) || n.probe_status === "testing";
       const testSpinner = `<svg style="animation: spin 1s linear infinite; width: 12px; height: 12px; display: inline-block; margin-right: 4px; vertical-align: middle;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-opacity="0.2" fill="none"></circle><path d="M4 12a8 8 0 018-8" stroke="currentColor" fill="none"></path></svg>`;
@@ -5116,9 +5204,9 @@ function render(){
         <td><span class="badge ${badgeClass}">${badgeText}</span></td>
         <td class="mono" style="white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis;" title="${esc(n.ip||n.remote_host)}:${n.remote_port||""}">${esc(n.ip||n.remote_host)}:${n.remote_port||""}</td>
         <td style="white-space: nowrap;">${latencyText}</td>
-        <td style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${esc(displayLocation)}">${flag ? `<span aria-hidden="true">${esc(flag)}</span> ` : ""}${esc(displayLocation)}</td>
+        <td style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${esc(locationTitle)}">${flag ? `<span aria-hidden="true">${esc(flag)}</span> ` : ""}${esc(displayLocation)}</td>
         <td style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${esc(n.owner||n.as_name||"-")}">${esc(n.owner||n.as_name||"-")}</td>
-        <td style="white-space: nowrap; max-width: 110px; overflow: hidden; text-overflow: ellipsis;" title="${esc(translateIpType(n.ip_type))}">${esc(translateIpType(n.ip_type))}</td>
+        <td style="white-space: nowrap; max-width: 110px; overflow: hidden; text-overflow: ellipsis;" title="${esc(ipTypeTitle)}">${esc(translateIpType(n.ip_type))}</td>
         <td>
           <div class="table-actions">
             ${testBtn}
@@ -5717,21 +5805,30 @@ function populateRoutingCountries() {
   if (!select) return;
   const countMap = {};
   nodes.forEach(n => {
+    const code = String(n.country_short || "").trim().toUpperCase();
     const c = translateCountry(n.country);
-    if (c) {
-      countMap[c] = (countMap[c] || 0) + 1;
+    if (/^[A-Z]{2}$/.test(code) && c) {
+      const current = countMap[code] || {name: c, count: 0};
+      current.count += 1;
+      countMap[code] = current;
     }
   });
   
-  const countries = Object.keys(countMap).sort();
+  const countries = Object.keys(countMap).sort((a, b) => countMap[a].name.localeCompare(countMap[b].name, "zh-CN"));
   let html = '<option value="">请选择要锁定的国家...</option>';
-  countries.forEach(c => {
-    html += `<option value="${esc(c)}">${esc(c)} (${countMap[c]}个节点)</option>`;
+  countries.forEach(code => {
+    html += `<option value="${esc(code)}">${esc(countryFlag(code))} ${esc(countMap[code].name)} (${countMap[code].count}个节点)</option>`;
   });
   select.innerHTML = html;
   
   if (state) {
-    select.value = state.force_country ? translateCountry(state.force_country) : "";
+    const saved = String(state.force_country || "").trim();
+    if (/^[A-Za-z]{2}$/.test(saved)) {
+      select.value = saved.toUpperCase();
+    } else {
+      const legacy = countries.find(code => countMap[code].name === translateCountry(saved));
+      select.value = legacy || "";
+    }
   }
 }
 
@@ -6527,9 +6624,11 @@ class Handler(BaseHTTPRequestHandler):
         elif effective_path == "/api/nodes":
             global last_active_ping_time, last_active_latency, active_openvpn_node_id
             nodes = read_nodes()
-            active_node = next((n for n in nodes if active_openvpn_node_id and n.get("id") == active_openvpn_node_id), None)
+            connection_state = get_state()
+            connection_ready = connection_ready_for_ui(connection_state)
+            active_node = next((n for n in nodes if connection_ready and n.get("id") == active_openvpn_node_id), None)
             for n in nodes:
-                n["active"] = (active_openvpn_node_id and n.get("id") == active_openvpn_node_id)
+                n["active"] = bool(connection_ready and n.get("id") == active_openvpn_node_id)
             if active_node:
                 ip = active_node.get("ip") or active_node.get("remote_host")
                 if ip:
@@ -6787,6 +6886,10 @@ class Handler(BaseHTTPRequestHandler):
                 expected_port = ui_cfg.get("port", 8787)
                 expected_suffix = ui_cfg.get("secret_path", "EJsW2EeBo9lY")
 
+                if ports_conflict(new_port_int, ui_cfg.get("proxy_port", 7928)):
+                    self.send_json({"ok": False, "error": "网页管理端口不能与代理出站端口相同"}, HTTPStatus.BAD_REQUEST)
+                    return
+
                 ui_cfg["username"] = new_username
                 if new_password:
                     ui_cfg["password"] = new_password
@@ -6823,7 +6926,7 @@ class Handler(BaseHTTPRequestHandler):
                 
                 new_proxy_port = payload.get("proxy_port")
                 routing_mode = str(payload.get("routing_mode") or "auto").strip()
-                force_country = str(payload.get("force_country") or "").strip()
+                force_country = normalize_routing_country(payload.get("force_country"), read_nodes())
                 routing_ip_type = str(payload.get("routing_ip_type") or "all").strip()
                 
                 try:
@@ -6848,7 +6951,7 @@ class Handler(BaseHTTPRequestHandler):
                 expected_proxy_port = ui_cfg.get("proxy_port", 7928)
                 fixed_node_id = current_fixed_node_id(ui_cfg) if routing_mode == "fixed_ip" else ""
                 
-                if new_proxy_port_int == ui_cfg.get("port", 8787):
+                if ports_conflict(ui_cfg.get("port", 8787), new_proxy_port_int):
                     self.send_json({"ok": False, "error": "代理出站端口不能与网页管理端口相同"}, HTTPStatus.BAD_REQUEST)
                     return
                 if routing_mode == "fixed_ip" and not fixed_node_id:
@@ -6892,7 +6995,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 payload = self.read_json_body()
                 routing_mode = str(payload.get("routing_mode") or "auto").strip()
-                force_country = str(payload.get("force_country") or "").strip()
+                force_country = normalize_routing_country(payload.get("force_country"), read_nodes())
                 routing_ip_type = str(payload.get("routing_ip_type") or "all").strip()
                 fav_fail_fallback = False
                 
@@ -7126,6 +7229,8 @@ class Handler(BaseHTTPRequestHandler):
                 if result["ok"]:
                     set_state(
                         proxy_ok=True,
+                        tunnel_ready=active_openvpn_running(),
+                        proxy_ready=active_openvpn_running(),
                         proxy_ip=result["ip"],
                         proxy_latency_ms=result["latency_ms"],
                         proxy_error=""
@@ -7133,6 +7238,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     set_state(
                         proxy_ok=False,
+                        proxy_ready=False,
                         proxy_ip="-",
                         proxy_latency_ms=0,
                         proxy_error=result.get("error", "未知错误")
@@ -7187,6 +7293,9 @@ def main() -> None:
             "last_fetch_source": "",
             "last_check_message": "服务已启动，正在初始化网络并获取候选 VPN 节点...",
             "is_connecting": True,
+            "tunnel_ready": False,
+            "proxy_ready": False,
+            "proxy_ok": False,
             "pending_node_id": "",
             "active_node_latency": "正在准备",
             "blacklisted_nodes": 0,

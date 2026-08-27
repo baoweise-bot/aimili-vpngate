@@ -227,8 +227,11 @@ def save_ui_cfg(cfg):
     path = "/opt/aimilivpn/vpngate_data/ui_auth.json"
     os.makedirs(os.path.dirname(path), exist_ok=True)
     try:
+        if os.path.exists(path):
+            os.chmod(path, 0o600)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
+        os.chmod(path, 0o600)
         return True
     except Exception:
         return False
@@ -579,10 +582,12 @@ def uninstall_service():
         stop_service()
         if shutil.which("systemctl"):
             subprocess.run(["systemctl", "disable", "aimilivpn.service"])
-            try:
-                os.unlink("/lib/systemd/system/aimilivpn.service")
-            except Exception:
-                pass
+            for unit_path in ("/lib/systemd/system/aimilivpn.service", "/etc/systemd/system/aimilivpn.service"):
+                try:
+                    os.unlink(unit_path)
+                except FileNotFoundError:
+                    pass
+            subprocess.run(["systemctl", "daemon-reload"], check=False)
         elif shutil.which("rc-service"):
             subprocess.run(["rc-update", "del", "aimilivpn"])
             try:
@@ -591,9 +596,25 @@ def uninstall_service():
                 pass
         try:
             os.unlink("/usr/bin/ml")
-        except Exception:
+        except FileNotFoundError:
             pass
-        subprocess.run(["rm", "-rf", INSTALL_DIR])
+        if shutil.which("ip"):
+            subprocess.run(["ip", "route", "flush", "table", "100"], check=False)
+            while subprocess.run(
+                ["ip", "rule", "del", "table", "100"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            ).returncode == 0:
+                pass
+        try:
+            os.unlink("/etc/sysctl.d/99-aimilivpn.conf")
+        except FileNotFoundError:
+            pass
+        if shutil.which("sysctl"):
+            subprocess.run(["sysctl", "--system"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        if os.path.realpath(INSTALL_DIR) == "/opt/aimilivpn" and os.path.isdir(INSTALL_DIR):
+            shutil.rmtree(INSTALL_DIR)
         print("AimiliVPN 已卸载！")
         sys.exit(0)
     else:
@@ -964,7 +985,7 @@ mkdir -p "${INSTALL_DIR}/vpngate_data"
 
 is_custom="n"
 if [ ! -f "$AUTH_FILE" ]; then
-    if [ -t 0 ]; then
+    if [ -t 0 ] && [ "${AIMILIVPN_NONINTERACTIVE:-0}" != "1" ]; then
         echo -e "\n${YELLOW}检测到是首次安装，是否需要自定义配置网页端参数（端口/安全后缀/登录账号密码）？${PLAIN}"
         read -p "是否自定义配置？[y/N]: " is_custom
     else
@@ -1050,6 +1071,7 @@ while True:
     # when username/password contain quotes, backslashes, or shell metacharacters.
     python3 - "$AUTH_FILE" "$UI_PORT" "$SECRET_PATH" "$UI_USERNAME" "$UI_PASSWORD" <<'PY'
 import json
+import os
 import sys
 
 auth_file, ui_port, secret_path, username, password = sys.argv[1:6]
@@ -1061,10 +1083,12 @@ cfg = {
     "username": username,
     "password": password,
 }
-with open(auth_file, "w", encoding="utf-8") as f:
+fd = os.open(auth_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, "w", encoding="utf-8") as f:
     json.dump(cfg, f, ensure_ascii=False, indent=2)
 PY
 fi
+chmod 600 "$AUTH_FILE"
 
 # 8. Start service
 # 8.5 Optimize network parameters (rp_filter for policy routing)
@@ -1187,7 +1211,7 @@ if [ -n "$PUBLIC_IPV6" ]; then
 fi
 echo -e "  * 网页管理账号:  ${YELLOW}${USERNAME}${PLAIN}"
 echo -e "  * 网页管理密码:  ${YELLOW}${PASSWORD}${PLAIN}"
-echo -e "  * HTTP/SOCKS5 代理端口:  ${BLUE}http://127.0.0.1:${PROXY_PORT}/${PLAIN}  或  ${BLUE}http://[::1]:${PROXY_PORT}/${PLAIN}"
+echo -e "  * HTTP/SOCKS5 代理端口:  ${BLUE}http://127.0.0.1:${PROXY_PORT}/${PLAIN}"
 echo -e " --------------------------------------------------------"
 echo -e "  * 快速状态指令:   ${YELLOW}ml status${PLAIN}  或  ${YELLOW}ml${PLAIN}"
 echo -e "  * 查看实时日志:   ${YELLOW}ml logs${PLAIN}"

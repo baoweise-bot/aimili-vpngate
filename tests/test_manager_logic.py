@@ -3,6 +3,10 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
+import shutil
+import stat
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -183,11 +187,16 @@ class ManagerLogicTests(unittest.TestCase):
         mobile, mobile_reason = manager.vpn_utils.classify_ip_type(
             {"proxy": False, "hosting": False, "mobile": True}
         )
+        unknown, unknown_reason = manager.vpn_utils.classify_ip_type(
+            {"proxy": True, "hosting": False, "mobile": False}
+        )
 
         self.assertEqual(("residential", "consumer_or_unclassified_network"), (residential, residential_reason))
         self.assertEqual(("hosting", "proxy_provider_datacenter"), (softether, softether_reason))
         self.assertEqual(("hosting", "hosting_flag"), (hosting, hosting_reason))
         self.assertEqual(("mobile", "mobile_flag"), (mobile, mobile_reason))
+        self.assertEqual(("unknown", "missing_provider_data"), (unknown, unknown_reason))
+        self.assertEqual("low", manager.vpn_utils.classification_confidence(unknown_reason))
 
     def test_ip_enrichment_reclassifies_legacy_cache_and_keeps_proxy_quality(self) -> None:
         ip = "118.240.250.95"
@@ -236,6 +245,132 @@ class ManagerLogicTests(unittest.TestCase):
         cache = json.loads(manager.vpn_utils.IP_CACHE_FILE.read_text(encoding="utf-8"))
         self.assertEqual(manager.vpn_utils.IP_CLASSIFICATION_VERSION, cache[ip]["classification_version"])
 
+    def test_ambiguous_datacenter_uses_secondary_source_and_geo_country(self) -> None:
+        ip = "219.100.37.98"
+        primary_payload = [{
+            "status": "success",
+            "query": ip,
+            "country": "Japan",
+            "countryCode": "JP",
+            "regionName": "Tokyo",
+            "city": "Chiyoda",
+            "isp": "SoftEther",
+            "org": "SoftEther Corporation",
+            "as": "AS36599 SoftEther",
+            "asname": "SOFTETHER",
+            "proxy": True,
+            "hosting": False,
+            "mobile": False,
+        }]
+        primary = mock.MagicMock()
+        primary.read.return_value = json.dumps(primary_payload).encode("utf-8")
+        primary.__enter__.return_value = primary
+        secondary = mock.MagicMock()
+        secondary.read.return_value = json.dumps({"is_datacenter": True, "is_vpn": True}).encode("utf-8")
+        secondary.__enter__.return_value = secondary
+        node = {"id": "softether", "ip": ip}
+
+        with mock.patch.object(
+            manager.vpn_utils.urllib.request,
+            "urlopen",
+            side_effect=[primary, secondary],
+        ):
+            manager.vpn_utils.enrich_ip_info([node])
+
+        self.assertEqual("hosting", node["ip_type"])
+        self.assertEqual("high", node["ip_type_confidence"])
+        self.assertEqual("datacenter", node["quality"])
+        self.assertTrue(node["is_hosting"])
+        self.assertEqual(["ip-api.com", "ipapi.is"], node["ip_type_sources"])
+        self.assertEqual("JP", node["geo_country_short"])
+
+    def test_unverified_datacenter_conflict_becomes_unknown(self) -> None:
+        ip = "203.0.113.10"
+        primary_payload = [{
+            "status": "success",
+            "query": ip,
+            "country": "Japan",
+            "countryCode": "JP",
+            "regionName": "Tokyo",
+            "city": "Tokyo",
+            "isp": "Example VPS",
+            "org": "Example VPS Hosting",
+            "as": "AS64500 Example",
+            "asname": "EXAMPLE",
+            "proxy": True,
+            "hosting": False,
+            "mobile": False,
+        }]
+        primary = mock.MagicMock()
+        primary.read.return_value = json.dumps(primary_payload).encode("utf-8")
+        primary.__enter__.return_value = primary
+        node = {"id": "ambiguous", "ip": ip}
+
+        with mock.patch.object(
+            manager.vpn_utils.urllib.request,
+            "urlopen",
+            side_effect=[primary, TimeoutError("secondary unavailable")],
+        ):
+            manager.vpn_utils.enrich_ip_info([node])
+
+        self.assertEqual("unknown", node["ip_type"])
+        self.assertEqual("low", node["ip_type_confidence"])
+        strict = manager.apply_routing_filters([node], {"routing_mode": "auto", "routing_ip_type": "residential"})
+        self.assertEqual([], strict)
+
+    def test_missing_provider_data_uses_secondary_source_or_stays_unknown(self) -> None:
+        ip = "203.0.113.11"
+        primary_payload = [{
+            "status": "success",
+            "query": ip,
+            "country": "Japan",
+            "countryCode": "JP",
+            "regionName": "Tokyo",
+            "city": "Tokyo",
+            "isp": "",
+            "org": "",
+            "as": "",
+            "asname": "",
+            "proxy": True,
+            "hosting": False,
+            "mobile": False,
+        }]
+        primary = mock.MagicMock()
+        primary.read.return_value = json.dumps(primary_payload).encode("utf-8")
+        primary.__enter__.return_value = primary
+        node = {"id": "missing-provider", "ip": ip}
+
+        with mock.patch.object(
+            manager.vpn_utils.urllib.request,
+            "urlopen",
+            side_effect=[primary, TimeoutError("secondary unavailable")],
+        ):
+            manager.vpn_utils.enrich_ip_info([node])
+
+        self.assertEqual("unknown", node["ip_type"])
+        self.assertEqual("provider_data_unverified", node["ip_type_reason"])
+        self.assertEqual("low", node["ip_type_confidence"])
+        strict = manager.apply_routing_filters(
+            [node],
+            {"routing_mode": "auto", "routing_ip_type": "residential"},
+        )
+        self.assertEqual([], strict)
+
+    def test_strict_residential_filter_requires_medium_or_high_confidence(self) -> None:
+        nodes = [
+            {"id": "low", "ip_type": "residential", "ip_type_confidence": "low"},
+            {"id": "medium", "ip_type": "residential", "ip_type_confidence": "medium"},
+            {"id": "mobile", "ip_type": "mobile", "ip_type_confidence": "high"},
+            {"id": "hosting", "ip_type": "hosting", "ip_type_confidence": "high"},
+        ]
+
+        strict = manager.apply_routing_filters(
+            nodes,
+            {"routing_mode": "auto", "routing_ip_type": "residential"},
+        )
+
+        self.assertEqual(["medium", "mobile"], [node["id"] for node in strict])
+
     def test_background_ip_enrichment_merges_metadata_without_replacing_status(self) -> None:
         nodes = self.write_nodes(2)
         nodes[0]["probe_status"] = "available"
@@ -256,13 +391,13 @@ class ManagerLogicTests(unittest.TestCase):
         self.assertEqual("available", next(node for node in stored if node["id"] == "node-0")["probe_status"])
         self.assertTrue(all(node["ip_type"] == "residential" for node in stored))
 
-    def test_source_deadline_skips_same_host_http_and_uses_github_https(self) -> None:
+    def test_source_deadline_still_tries_official_http(self) -> None:
         csv_text = valid_snapshot()
 
         def fake_fetch(url, verify_ssl=True, deadline_seconds=None):
             if url == manager.API_HTTPS_URL:
                 raise manager.SourceDeadlineExceeded("slow official source")
-            if url == manager.MIRROR_HTTPS_URL:
+            if url == manager.API_HTTP_URL:
                 return csv_text
             raise AssertionError(f"unexpected source: {url}")
 
@@ -275,9 +410,59 @@ class ManagerLogicTests(unittest.TestCase):
 
         self.assertEqual(1, len(nodes))
         self.assertEqual(
-            [manager.API_HTTPS_URL, manager.MIRROR_HTTPS_URL],
+            [manager.API_HTTPS_URL, manager.API_HTTP_URL],
             [call.args[0] for call in fetch_mock.call_args_list],
         )
+
+    def test_probe_failure_preserves_existing_ip_metadata(self) -> None:
+        nodes = self.write_nodes(1)
+        nodes[0].update(
+            {
+                "owner": "Existing ISP",
+                "location": "日本 东京",
+                "ip_type": "residential",
+                "ip_type_confidence": "medium",
+            }
+        )
+        manager.write_json(manager.NODES_FILE, nodes)
+
+        with (
+            mock.patch.object(manager.vpn_utils, "ping_latency_ms", return_value=0),
+            mock.patch.object(manager, "run_openvpn_until_ready", return_value=(False, "offline", None)),
+        ):
+            manager.test_multiple_nodes([nodes[0]["id"]])
+
+        stored = manager.read_nodes()[0]
+        self.assertEqual("unavailable", stored["probe_status"])
+        self.assertEqual("Existing ISP", stored["owner"])
+        self.assertEqual("日本 东京", stored["location"])
+        self.assertEqual("residential", stored["ip_type"])
+        self.assertEqual("medium", stored["ip_type_confidence"])
+
+    def test_country_matching_accepts_iso_and_legacy_name(self) -> None:
+        node = {"country": "日本", "country_short": "JP"}
+        self.assertTrue(manager.country_matches(node["country"], "JP", node["country_short"]))
+        self.assertTrue(manager.country_matches(node["country"], "日本", node["country_short"]))
+        self.assertFalse(manager.country_matches(node["country"], "KR", node["country_short"]))
+        self.assertEqual("JP", manager.normalize_routing_country("日本", [node]))
+
+    def test_web_and_proxy_ports_must_be_distinct(self) -> None:
+        self.assertTrue(manager.ports_conflict(8787, "8787"))
+        self.assertFalse(manager.ports_conflict(8787, 7928))
+
+    def test_ui_connection_requires_tunnel_and_proxy_readiness(self) -> None:
+        manager.active_openvpn_node_id = "node-1"
+        manager.active_openvpn_process = FakeProcess()
+        base_state = {"is_connecting": False, "tunnel_ready": True, "proxy_ready": False, "proxy_ok": False}
+        self.assertFalse(manager.connection_ready_for_ui(base_state))
+        ready_state = {**base_state, "proxy_ready": True, "proxy_ok": True}
+        self.assertTrue(manager.connection_ready_for_ui(ready_state))
+
+    def test_ui_auth_json_is_written_private(self) -> None:
+        auth_file = manager.DATA_DIR / "ui_auth.json"
+        manager.write_json(auth_file, {"username": "test", "password": "secret"})
+        if os.name != "nt":
+            self.assertEqual(0o600, stat.S_IMODE(auth_file.stat().st_mode))
 
     def test_source_deadline_limits_total_fetch_time(self) -> None:
         def slow_fetch(url, verify_ssl=True):
@@ -569,6 +754,26 @@ class ManagerLogicTests(unittest.TestCase):
         self.assertIn('${esc(localProxy)}', manager.INDEX_HTML)
         self.assertIn('${esc(statusMessage)}', manager.INDEX_HTML)
 
+    def test_dashboard_javascript_is_valid(self) -> None:
+        if not shutil.which("node"):
+            self.skipTest("Node.js is not installed; JavaScript syntax check skipped")
+        scripts = re.findall(r"<script>(.*?)</script>", manager.INDEX_HTML, re.DOTALL)
+        self.assertTrue(scripts)
+        with tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8", delete=False) as handle:
+            handle.write("\n".join(scripts))
+            script_path = handle.name
+        try:
+            result = subprocess.run(
+                ["node", "--check", script_path],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+        finally:
+            Path(script_path).unlink(missing_ok=True)
+
     def test_random_password_uses_cryptographic_randomness(self) -> None:
         with mock.patch.object(manager.secrets, "choice", side_effect=list("aA0aA0aA0aA0")) as choice:
             password = manager.generate_random_password()
@@ -630,6 +835,17 @@ class ManagerLogicTests(unittest.TestCase):
         self.assertIn('state["active_openvpn_node_id"] = ""', install_text)
         self.assertIn("ip link show dev tun0", install_text)
         self.assertIn("pidof openvpn", install_text)
+        self.assertIn('chmod 600 "$AUTH_FILE"', install_text)
+        self.assertIn("AIMILIVPN_NONINTERACTIVE", install_text)
+        self.assertIn('["ip", "rule", "del", "table", "100"]', install_text)
+        self.assertIn('/etc/sysctl.d/99-aimilivpn.conf', install_text)
+        self.assertNotIn('http://[::1]:${PROXY_PORT}', install_text)
+
+    def test_openvpn_command_requires_server_certificate_usage(self) -> None:
+        with mock.patch.object(manager, "get_openvpn_version", return_value=2.5):
+            command = manager.openvpn_command("node.ovpn", route_nopull=True)
+        index = command.index("--remote-cert-tls")
+        self.assertEqual("server", command[index + 1])
 
     def test_release_workflow_uses_full_patch_version(self) -> None:
         workflow_text = (manager.ROOT_DIR / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
@@ -717,6 +933,7 @@ class ManagerLogicTests(unittest.TestCase):
             mock.patch.object(manager, "fetch_api_text", side_effect=fake_fetch) as fetch_mock,
             mock.patch.object(manager, "load_blacklist", return_value={}),
             mock.patch.object(manager, "log_to_json"),
+            mock.patch.object(manager, "read_mirror_freshness", return_value=(0.0, "")),
         ):
             nodes = manager.fetch_candidates()
 

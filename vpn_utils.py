@@ -9,13 +9,14 @@ import time
 import urllib.parse
 import urllib.request
 import threading
+import concurrent.futures
 from pathlib import Path
 from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ["VPNGATE_DATA_DIR"]).resolve() if os.environ.get("VPNGATE_DATA_DIR") else ROOT_DIR / "vpngate_data"
 IP_CACHE_FILE = DATA_DIR / "ip_cache.json"
-IP_CLASSIFICATION_VERSION = 2
+IP_CLASSIFICATION_VERSION = 4
 IP_CACHE_TTL_SECONDS = 7 * 24 * 3600
 
 ip_cache_lock = threading.RLock()
@@ -407,12 +408,40 @@ def classify_ip_type(item: dict[str, Any]) -> tuple[str, str]:
         str(item.get(key) or "")
         for key in ("isp", "org", "as", "asname")
     )
+    if not provider_text.strip():
+        return "unknown", "missing_provider_data"
     if item.get("proxy") and DATACENTER_PROVIDER_PATTERN.search(provider_text):
         return "hosting", "proxy_provider_datacenter"
 
     # A residential volunteer running VPNGate is commonly marked as a proxy.
     # Proxy use is retained in quality/is_proxy and must not change ownership.
     return "residential", "consumer_or_unclassified_network"
+
+def classification_confidence(reason: str) -> str:
+    if reason in {"mobile_flag", "hosting_flag", "secondary_datacenter", "secondary_mobile"}:
+        return "high"
+    if reason in {"consumer_or_unclassified_network", "secondary_consumer_network"}:
+        return "medium"
+    return "low"
+
+def query_secondary_ip_type(ip: str) -> dict[str, Any] | None:
+    request = urllib.request.Request(
+        f"https://api.ipapi.is/?q={urllib.parse.quote(ip)}",
+        headers={"User-Agent": f"AimiliVPN-IP-Classifier/{IP_CLASSIFICATION_VERSION}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=6) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+        if (
+            not isinstance(payload, dict)
+            or payload.get("error")
+            or not any(key in payload for key in ("is_datacenter", "is_mobile"))
+        ):
+            return None
+        return payload
+    except Exception as exc:
+        print(f"[IP 类型] 第二情报源查询 {ip} 失败: {exc}", flush=True)
+        return None
 
 def apply_ip_cache_entry(node: dict[str, Any], entry: dict[str, Any]) -> None:
     for key in (
@@ -426,6 +455,9 @@ def apply_ip_cache_entry(node: dict[str, Any], entry: dict[str, Any]) -> None:
         "is_hosting",
         "is_mobile",
         "ip_type_reason",
+        "ip_type_confidence",
+        "ip_type_sources",
+        "geo_country_short",
     ):
         node[key] = entry.get(key, "")
 
@@ -463,7 +495,7 @@ def enrich_ip_info(nodes: list[dict[str, Any]]) -> None:
         chunk = ips_to_query[i : i + chunk_size]
         payload = json.dumps(chunk).encode("utf-8")
         request = urllib.request.Request(
-            "http://ip-api.com/batch?lang=zh-CN&fields=status,message,query,country,regionName,city,isp,org,as,asname,proxy,hosting,mobile",
+            "http://ip-api.com/batch?lang=zh-CN&fields=status,message,query,country,countryCode,regionName,city,isp,org,as,asname,proxy,hosting,mobile",
             data=payload,
             headers={
                 "Content-Type": "application/json",
@@ -502,17 +534,64 @@ def enrich_ip_info(nodes: list[dict[str, Any]]) -> None:
                         "asn": item.get("as") or "",
                         "as_name": item.get("asname") or "",
                         "location": loc,
+                        "geo_country_short": str(item.get("countryCode") or "").upper(),
                         "ip_type": ip_type,
                         "quality": quality,
                         "is_proxy": bool(item.get("proxy")),
                         "is_hosting": bool(item.get("hosting")),
                         "is_mobile": bool(item.get("mobile")),
                         "ip_type_reason": ip_type_reason,
+                        "ip_type_confidence": classification_confidence(ip_type_reason),
+                        "ip_type_sources": ["ip-api.com"],
                         "classification_version": IP_CLASSIFICATION_VERSION,
                         "cached_at": now,
                     }
         except Exception as e:
             print(f"[enrich_ip_info] Query failed: {e}", flush=True)
+
+    ambiguous_ips = [
+        ip
+        for ip, entry in new_entries.items()
+        if entry.get("ip_type_reason") in {"proxy_provider_datacenter", "missing_provider_data"}
+    ]
+    if ambiguous_ips:
+        max_workers = min(4, len(ambiguous_ips))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_map = {
+                executor.submit(query_secondary_ip_type, ip): ip
+                for ip in ambiguous_ips
+            }
+            for future in concurrent.futures.as_completed(future_map):
+                ip = future_map[future]
+                try:
+                    secondary = future.result()
+                except Exception:
+                    secondary = None
+                entry = new_entries[ip]
+                if secondary is None:
+                    entry["ip_type"] = "unknown"
+                    entry["ip_type_reason"] = (
+                        "provider_data_unverified"
+                        if entry.get("ip_type_reason") == "missing_provider_data"
+                        else "datacenter_conflict_unverified"
+                    )
+                    entry["ip_type_confidence"] = "low"
+                    continue
+                entry["ip_type_sources"].append("ipapi.is")
+                if secondary.get("is_mobile"):
+                    entry["ip_type"] = "mobile"
+                    entry["ip_type_reason"] = "secondary_mobile"
+                    entry["quality"] = "mobile"
+                    entry["is_mobile"] = True
+                elif secondary.get("is_datacenter"):
+                    entry["ip_type"] = "hosting"
+                    entry["ip_type_reason"] = "secondary_datacenter"
+                    entry["quality"] = "datacenter"
+                    entry["is_hosting"] = True
+                else:
+                    entry["ip_type"] = "residential"
+                    entry["ip_type_reason"] = "secondary_consumer_network"
+                entry["ip_type_confidence"] = classification_confidence(entry["ip_type_reason"])
 
     if not new_entries:
         return
