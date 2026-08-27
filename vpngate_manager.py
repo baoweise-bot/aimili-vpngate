@@ -7146,28 +7146,13 @@ class Handler(BaseHTTPRequestHandler):
                     DATA_DIR.mkdir(exist_ok=True, parents=True)
                     write_json(auth_file, ui_cfg)
                 
-                stop_active_openvpn()
-                with lock:
-                    nodes = read_nodes()
-                    for item in nodes:
-                        item["active"] = False
-                    write_json(NODES_FILE, nodes)
+                clear_active_connection_state("手动断开连接")
                 global last_active_ping_time, last_active_latency
                 last_active_ping_time = 0.0
                 last_active_latency = 0
                 global consecutive_proxy_failures, last_proxy_failure_node_id
                 consecutive_proxy_failures = 0
                 last_proxy_failure_node_id = ""
-                set_state(
-                    active_openvpn_node_id="",
-                    pending_node_id="",
-                    last_check_message="手动断开连接",
-                    active_node_latency="无活动连接",
-                    proxy_ok=False,
-                    proxy_ip="-",
-                    proxy_latency_ms=0,
-                    proxy_error="连接已手动断开",
-                )
                 self.send_json({"ok": True})
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)

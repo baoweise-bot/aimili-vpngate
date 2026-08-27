@@ -458,6 +458,30 @@ class ManagerLogicTests(unittest.TestCase):
         ready_state = {**base_state, "proxy_ready": True, "proxy_ok": True}
         self.assertTrue(manager.connection_ready_for_ui(ready_state))
 
+    def test_manual_disconnect_state_clears_all_readiness_flags(self) -> None:
+        nodes = self.write_nodes(1)
+        nodes[0]["active"] = True
+        manager.write_json(manager.NODES_FILE, nodes)
+        manager.set_state(
+            is_connecting=True,
+            tunnel_ready=True,
+            proxy_ready=True,
+            proxy_ok=True,
+            proxy_ip="198.51.100.20",
+        )
+
+        with mock.patch.object(manager, "stop_active_openvpn") as stop_mock:
+            manager.clear_active_connection_state("手动断开连接")
+
+        stop_mock.assert_called_once_with()
+        state = manager.get_state()
+        self.assertFalse(state["is_connecting"])
+        self.assertFalse(state["tunnel_ready"])
+        self.assertFalse(state["proxy_ready"])
+        self.assertFalse(state["proxy_ok"])
+        self.assertEqual("-", state["proxy_ip"])
+        self.assertFalse(any(node.get("active") for node in manager.read_nodes()))
+
     def test_ui_auth_json_is_written_private(self) -> None:
         auth_file = manager.DATA_DIR / "ui_auth.json"
         manager.write_json(auth_file, {"username": "test", "password": "secret"})
