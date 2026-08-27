@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing formal tag to publish, for example v2.1.3
+        description: Existing formal tag to publish, for example v2.1.4
         required: true
-        default: v2.1.3
+        default: v2.1.4
         type: string
 
 concurrency:

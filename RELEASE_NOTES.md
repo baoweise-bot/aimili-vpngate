@@ -1,6 +1,12 @@
-# AimiliVPN V2.1.3 正式版
+# AimiliVPN V2.1.4 正式版
 
-V2.1.3 是一次完整的稳定性、安全性和节点识别修复版本。重点解决节点切换期间状态显示过早、未知网络误判住宅、部分 VPS 节点源回退不合理，以及安装卸载残留等问题。
+V2.1.4 包含 V2.1.3 的全部稳定性、安全性和节点识别改进，并修复正式版重新安装验收中发现的手动断开状态遗漏。
+
+## V2.1.4 热修复
+
+- 修复点击“断开连接”后 OpenVPN、活动节点和 table 100 已清理，但 Web API 的 `tunnel_ready` / `proxy_ready` 仍短暂保留为 `true` 的问题。
+- 手动断开现在统一复用完整连接状态清理流程；活动节点、连接中状态、隧道、代理出口、出口 IP 与路由规则会同步归零。
+- 新增手动断开状态回归测试，并在真实 VPS 上完成断开与重新连接复验。
 
 ## IP 类型识别
 
@@ -31,7 +37,7 @@ V2.1.3 是一次完整的稳定性、安全性和节点识别修复版本。重�
 
 ## 验证与兼容性
 
-- 本地 Python 单元测试 51/51 通过，Python 编译、Dashboard JavaScript 语法、安装脚本语法和补丁格式检查通过。
+- 本地 Python 单元测试 52/52 通过，Python 编译、Dashboard JavaScript 语法、安装脚本语法和补丁格式检查通过。
 - Ubuntu 22.04 x86_64 VPS 已完成真实卸载、重新安装、节点源、连接切换、代理出口、Web API、权限和路由残留验证。
 - 发布流水线会在 Python 3.9、3.11、3.13 上运行完整测试。
 - Docker 会分别构建验证 `linux/amd64`、`linux/386`、`linux/arm64`、`linux/arm/v7`，并发布统一多架构镜像清单。
@@ -44,8 +50,8 @@ V2.1.3 是一次完整的稳定性、安全性和节点识别修复版本。重�
 
 ## 下载与更新
 
-- GitHub Release：`aimilivpn-v2.1.3-linux-source.tar.gz` 和 `sha256sums.txt`。
-- GHCR：`2.1.3`、`2.1`、`latest` 多架构镜像标签。
+- GitHub Release：`aimilivpn-v2.1.4-linux-source.tar.gz` 和 `sha256sums.txt`。
+- GHCR：`2.1.4`、`2.1`、`latest` 多架构镜像标签。
 
 Python 源码安装更新：
 
