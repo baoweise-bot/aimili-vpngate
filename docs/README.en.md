@@ -10,7 +10,7 @@
 
 [简体中文](../README.md) · **English** · [日本語](README.ja.md) · [한국어](README.ko.md)
 
-[Quick install](#quick-install) · [Installation](#installation) · [Connection](#connection) · [VPS offers](#vps) · [Community](#community) · [Legal notice](#legal)
+[Quick install](#quick-install) · [Installation](#installation) · [Connection](#connection) · [Recommended services](#vps) · [Community](#community) · [Legal notice](#legal)
 
 [![Website](https://img.shields.io/badge/Website-339936.xyz-f97316?style=for-the-badge)](https://339936.xyz)
 [![Telegram](https://img.shields.io/badge/Telegram-Community-229ED9?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/arestemple)
@@ -46,44 +46,15 @@ The installer prints the complete Web URL, private path, username, and password.
 > Enable TUN/TAP in the VPS control panel and verify that `/dev/net/tun` exists. The Web dashboard uses TCP `8787` by default; restrict firewall access to your own IP whenever possible.
 
 <a id="vps"></a>
-## VPS Offers
+## Recommended Services
 
-The following are affiliate links. Using them does not increase your price.
+| Provider | Type | Why we recommend it | Link |
+| --- | --- | --- | --- |
+| **BandwagonHost** | VPS | Optimized China Telecom CN2 GIA, China Unicom 9929, and China Mobile CMIN2 routes; low latency and strong stability for TikTok Live, cross-border commerce, and long-running global services. | [View offer](https://bandwagonhost.com/aff.php?aff=81790) |
+| **RackNerd** | VPS | 4000GB of monthly traffic with strong value for the price; low deployment costs for services that need to run continuously. | [View offer](https://my.racknerd.com/aff.php?aff=18708) |
+| **OpenMili** | AI relay | Direct GPT model access without model substitution, a low-cost 1:2 rate, and image generation support. | [Visit OpenMili](https://openmili.com/) |
 
-<table>
-<tr>
-<td width="50%" valign="top">
-<h3 align="center">BandwagonHost</h3>
-<p align="center">
-<img alt="CN2 GIA" src="https://img.shields.io/badge/China_Telecom-CN2_GIA-dc2626?style=flat-square">
-<img alt="China Unicom 9929" src="https://img.shields.io/badge/China_Unicom-9929-f97316?style=flat-square">
-<img alt="China Mobile CMIN2" src="https://img.shields.io/badge/China_Mobile-CMIN2-16a34a?style=flat-square">
-</p>
-<p><strong>Highlights</strong></p>
-<ul>
-<li>Premium CN2 GIA, China Unicom 9929, and China Mobile CMIN2 optimized routes.</li>
-<li>Low latency, high stability, and excellent cross-border route quality.</li>
-<li>Strong connectivity for TikTok live operations, cross-border e-commerce, and long-running global services.</li>
-</ul>
-<p align="center"><a href="https://bandwagonhost.com/aff.php?aff=81790"><img alt="View BandwagonHost" src="https://img.shields.io/badge/View-BandwagonHost-dc2626?style=for-the-badge"></a></p>
-</td>
-<td width="50%" valign="top">
-<h3 align="center">RackNerd</h3>
-<p align="center">
-<img alt="4000GB monthly traffic" src="https://img.shields.io/badge/Monthly_Traffic-4000GB-0284c7?style=flat-square">
-<img alt="High traffic" src="https://img.shields.io/badge/Advantage-High_Traffic-0ea5e9?style=flat-square">
-<img alt="Value" src="https://img.shields.io/badge/Pricing-High_Value-2563eb?style=flat-square">
-</p>
-<p><strong>Highlights</strong></p>
-<ul>
-<li>4000GB of monthly traffic with generous transfer headroom.</li>
-<li>Affordable pricing and a strong traffic-to-cost ratio.</li>
-<li>Low deployment cost for services that need to run continuously.</li>
-</ul>
-<p align="center"><a href="https://my.racknerd.com/aff.php?aff=18708"><img alt="View RackNerd" src="https://img.shields.io/badge/View-RackNerd-0284c7?style=for-the-badge"></a></p>
-</td>
-</tr>
-</table>
+Some links are affiliate links. Using them does not increase your price.
 
 Before purchasing, confirm that the selected plan permits TUN/TAP, OpenVPN, and the required network protocols. An affiliate link is not a guarantee that a specific plan will work.
 

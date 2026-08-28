@@ -10,7 +10,7 @@
 
 **简体中文** · [English](docs/README.en.md) · [日本語](docs/README.ja.md) · [한국어](docs/README.ko.md)
 
-[快速安装](#quick-install) · [完整安装](#installation) · [连接使用](#connection) · [VPS 推荐](#vps) · [社区入口](#community) · [法律声明](#legal)
+[快速安装](#quick-install) · [完整安装](#installation) · [连接使用](#connection) · [服务商推荐](#vps) · [社区入口](#community) · [法律声明](#legal)
 
 [![项目网站](https://img.shields.io/badge/项目网站-339936.xyz-f97316?style=for-the-badge)](https://339936.xyz)
 [![Telegram](https://img.shields.io/badge/Telegram-交流群-229ED9?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/arestemple)
@@ -19,42 +19,15 @@
 </div>
 
 <a id="vps"></a>
-## VPS 推荐
+## 服务商推荐
 
-<table>
-<tr>
-<td width="50%" valign="top">
-<h3 align="center">BandwagonHost 搬瓦工</h3>
-<p align="center">
-<img alt="CN2 GIA" src="https://img.shields.io/badge/电信-CN2_GIA-dc2626?style=flat-square">
-<img alt="联通 9929" src="https://img.shields.io/badge/联通-9929-f97316?style=flat-square">
-<img alt="移动 CMIN2" src="https://img.shields.io/badge/移动-CMIN2-16a34a?style=flat-square">
-</p>
-<p><strong>主要特点</strong></p>
-<ul>
-<li>电信 CN2 GIA、联通 9929、移动 CMIN2 等三网极品优化线路。</li>
-<li>低延迟、高稳定性，跨境链路质量出色。</li>
-<li>适合 TikTok 直播运营、海外带货和长期出海业务。</li>
-</ul>
-<p align="center"><a href="https://bandwagonhost.com/aff.php?aff=81790"><img alt="查看 BandwagonHost" src="https://img.shields.io/badge/立即查看-BandwagonHost-dc2626?style=for-the-badge"></a></p>
-</td>
-<td width="50%" valign="top">
-<h3 align="center">RackNerd</h3>
-<p align="center">
-<img alt="4000GB 每月流量" src="https://img.shields.io/badge/每月流量-4000GB-0284c7?style=flat-square">
-<img alt="大流量" src="https://img.shields.io/badge/优势-大流量-0ea5e9?style=flat-square">
-<img alt="高性价比" src="https://img.shields.io/badge/价格-高性价比-2563eb?style=flat-square">
-</p>
-<p><strong>主要特点</strong></p>
-<ul>
-<li>每月 4000GB 大流量，流量余量更充足。</li>
-<li>价格实惠，流量与配置的性价比突出。</li>
-<li>部署成本低，适合需要长期稳定运行的服务。</li>
-</ul>
-<p align="center"><a href="https://my.racknerd.com/aff.php?aff=18708"><img alt="查看 RackNerd" src="https://img.shields.io/badge/立即查看-RackNerd-0284c7?style=for-the-badge"></a></p>
-</td>
-</tr>
-</table>
+| 商家 | 推荐理由 | 入口 |
+| --- | --- | --- |
+| **BandwagonHost** | 电信 CN2 GIA、联通 9929、移动 CMIN2 三网优化线路；低延迟、高稳定性，适合 TikTok 直播、海外带货和长期出海业务。 | [立即查看](https://bandwagonhost.com/aff.php?aff=81790) |
+| **RackNerd** | 每月 4000GB 大流量，价格与配置性价比突出；部署成本低，适合需要长期稳定运行的服务。 | [立即查看](https://my.racknerd.com/aff.php?aff=18708) |
+| **OpenMili** | GPT 纯血 AI 中转站，无掺水；1:2 超低价汇率，支持生图。 | [立即访问](https://openmili.com/) |
+
+部分链接为推广链接，通过这些链接购买不会增加你的费用。
 
 AimiliVPN 使用 Python 标准库管理 VPNGate 节点，提供节点获取与检测、连接切换、Web 管理后台，以及共用一个端口的 HTTP、HTTPS 网站代理和 SOCKS5 代理服务。
 
@@ -273,7 +246,6 @@ ssh -N \
 | Telegram 群 | 即时交流 | [t.me/arestemple](https://t.me/arestemple) |
 | YouTube 教程 | 安装和使用视频 | [观看视频](https://www.youtube.com/watch?v=s-ATfXR8BpI) |
 | GitHub Issues | 可复现的问题与功能建议 | [提交 Issue](https://github.com/baoweise-bot/aimili-vpngate/issues) |
-| 电子邮箱 | Bug 反馈与联系 | [yaohunse7@gmail.com](mailto:yaohunse7@gmail.com) |
 
 <a id="legal"></a>
 ## 使用范围与法律声明

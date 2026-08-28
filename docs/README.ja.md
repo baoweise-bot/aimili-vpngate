@@ -10,7 +10,7 @@
 
 [简体中文](../README.md) · [English](README.en.md) · **日本語** · [한국어](README.ko.md)
 
-[クイックインストール](#quick-install) · [インストール](#installation) · [接続方法](#connection) · [VPS](#vps) · [コミュニティ](#community) · [法的通知](#legal)
+[クイックインストール](#quick-install) · [インストール](#installation) · [接続方法](#connection) · [おすすめサービス](#vps) · [コミュニティ](#community) · [法的通知](#legal)
 
 [![Website](https://img.shields.io/badge/Website-339936.xyz-f97316?style=for-the-badge)](https://339936.xyz)
 [![Telegram](https://img.shields.io/badge/Telegram-Community-229ED9?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/arestemple)
@@ -45,44 +45,15 @@ bash <(curl -Ls https://raw.githubusercontent.com/baoweise-bot/aimili-vpngate/ma
 > VPS の管理画面で TUN/TAP を有効にし、`/dev/net/tun` が存在することを確認してください。Web のデフォルトポートは TCP `8787` です。可能な限り自分の IP だけを許可してください。
 
 <a id="vps"></a>
-## VPS の案内
+## おすすめサービス
 
-以下はアフィリエイトリンクです。リンク経由でも購入価格は上がりません。
+| サービス | 種類 | おすすめポイント | リンク |
+| --- | --- | --- | --- |
+| **BandwagonHost** | VPS | China Telecom CN2 GIA、China Unicom 9929、China Mobile CMIN2 の最適化回線。低遅延で安定しており、TikTok ライブ、越境 EC、長期的な海外向けサービスに適しています。 | [詳細を見る](https://bandwagonhost.com/aff.php?aff=81790) |
+| **RackNerd** | VPS | 月間 4000GB の大容量トラフィックと高いコストパフォーマンス。継続稼働するサービスの導入コストを抑えられます。 | [詳細を見る](https://my.racknerd.com/aff.php?aff=18708) |
+| **OpenMili** | AI 中継 | GPT モデルを差し替えずに提供する AI 中継サービス。低価格な 1:2 レートで、画像生成にも対応しています。 | [OpenMili を見る](https://openmili.com/) |
 
-<table>
-<tr>
-<td width="50%" valign="top">
-<h3 align="center">BandwagonHost</h3>
-<p align="center">
-<img alt="CN2 GIA" src="https://img.shields.io/badge/China_Telecom-CN2_GIA-dc2626?style=flat-square">
-<img alt="China Unicom 9929" src="https://img.shields.io/badge/China_Unicom-9929-f97316?style=flat-square">
-<img alt="China Mobile CMIN2" src="https://img.shields.io/badge/China_Mobile-CMIN2-16a34a?style=flat-square">
-</p>
-<p><strong>主な特長</strong></p>
-<ul>
-<li>CN2 GIA、China Unicom 9929、China Mobile CMIN2 の高品質な最適化回線。</li>
-<li>低遅延、高い安定性、優れた国際経路品質。</li>
-<li>TikTok ライブ運営、越境 EC、長期的な海外向け事業に適した回線。</li>
-</ul>
-<p align="center"><a href="https://bandwagonhost.com/aff.php?aff=81790"><img alt="BandwagonHost" src="https://img.shields.io/badge/View-BandwagonHost-dc2626?style=for-the-badge"></a></p>
-</td>
-<td width="50%" valign="top">
-<h3 align="center">RackNerd</h3>
-<p align="center">
-<img alt="4000GB monthly traffic" src="https://img.shields.io/badge/Monthly_Traffic-4000GB-0284c7?style=flat-square">
-<img alt="High traffic" src="https://img.shields.io/badge/Advantage-High_Traffic-0ea5e9?style=flat-square">
-<img alt="Value" src="https://img.shields.io/badge/Pricing-High_Value-2563eb?style=flat-square">
-</p>
-<p><strong>主な特長</strong></p>
-<ul>
-<li>月間 4000GB の大容量トラフィック。</li>
-<li>手頃な価格と優れたトラフィック対コスト比。</li>
-<li>継続稼働するサービスの導入コストを抑えやすい構成。</li>
-</ul>
-<p align="center"><a href="https://my.racknerd.com/aff.php?aff=18708"><img alt="RackNerd" src="https://img.shields.io/badge/View-RackNerd-0284c7?style=for-the-badge"></a></p>
-</td>
-</tr>
-</table>
+一部のリンクはアフィリエイトリンクです。リンク経由でも購入価格は上がりません。
 
 購入前に、対象プランが TUN/TAP、OpenVPN、必要なプロトコルを許可していることを確認してください。
 

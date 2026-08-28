@@ -10,7 +10,7 @@
 
 [简体中文](../README.md) · [English](README.en.md) · [日本語](README.ja.md) · **한국어**
 
-[빠른 설치](#quick-install) · [설치](#installation) · [연결](#connection) · [VPS](#vps) · [커뮤니티](#community) · [법적 고지](#legal)
+[빠른 설치](#quick-install) · [설치](#installation) · [연결](#connection) · [추천 서비스](#vps) · [커뮤니티](#community) · [법적 고지](#legal)
 
 [![Website](https://img.shields.io/badge/Website-339936.xyz-f97316?style=for-the-badge)](https://339936.xyz)
 [![Telegram](https://img.shields.io/badge/Telegram-Community-229ED9?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/arestemple)
@@ -45,44 +45,15 @@ bash <(curl -Ls https://raw.githubusercontent.com/baoweise-bot/aimili-vpngate/ma
 > VPS 제어판에서 TUN/TAP을 활성화하고 `/dev/net/tun`이 존재하는지 확인하십시오. Web 기본 포트는 TCP `8787`이며 가능하면 자신의 IP만 허용하십시오.
 
 <a id="vps"></a>
-## VPS 안내
+## 추천 서비스
 
-아래 링크는 제휴 링크이며, 이를 통해 구매해도 가격은 올라가지 않습니다.
+| 서비스 | 유형 | 추천 이유 | 링크 |
+| --- | --- | --- | --- |
+| **BandwagonHost** | VPS | China Telecom CN2 GIA, China Unicom 9929, China Mobile CMIN2 최적화 회선. 지연 시간이 짧고 안정적이며 TikTok 라이브, 해외 전자상거래 및 장기 글로벌 서비스에 적합합니다. | [자세히 보기](https://bandwagonhost.com/aff.php?aff=81790) |
+| **RackNerd** | VPS | 월 4000GB의 넉넉한 트래픽과 뛰어난 비용 효율. 장기 실행 서비스의 배포 비용을 낮추기 좋습니다. | [자세히 보기](https://my.racknerd.com/aff.php?aff=18708) |
+| **OpenMili** | AI 중계 | GPT 모델을 바꾸지 않고 제공하는 AI 중계 서비스. 저렴한 1:2 요율과 이미지 생성 기능을 지원합니다. | [OpenMili 방문](https://openmili.com/) |
 
-<table>
-<tr>
-<td width="50%" valign="top">
-<h3 align="center">BandwagonHost</h3>
-<p align="center">
-<img alt="CN2 GIA" src="https://img.shields.io/badge/China_Telecom-CN2_GIA-dc2626?style=flat-square">
-<img alt="China Unicom 9929" src="https://img.shields.io/badge/China_Unicom-9929-f97316?style=flat-square">
-<img alt="China Mobile CMIN2" src="https://img.shields.io/badge/China_Mobile-CMIN2-16a34a?style=flat-square">
-</p>
-<p><strong>주요 특징</strong></p>
-<ul>
-<li>CN2 GIA, China Unicom 9929, China Mobile CMIN2 프리미엄 최적화 회선.</li>
-<li>낮은 지연 시간, 높은 안정성, 뛰어난 국제 경로 품질.</li>
-<li>TikTok 라이브 운영, 해외 전자상거래 및 장기 글로벌 서비스에 적합한 연결 품질.</li>
-</ul>
-<p align="center"><a href="https://bandwagonhost.com/aff.php?aff=81790"><img alt="BandwagonHost" src="https://img.shields.io/badge/View-BandwagonHost-dc2626?style=for-the-badge"></a></p>
-</td>
-<td width="50%" valign="top">
-<h3 align="center">RackNerd</h3>
-<p align="center">
-<img alt="4000GB monthly traffic" src="https://img.shields.io/badge/Monthly_Traffic-4000GB-0284c7?style=flat-square">
-<img alt="High traffic" src="https://img.shields.io/badge/Advantage-High_Traffic-0ea5e9?style=flat-square">
-<img alt="Value" src="https://img.shields.io/badge/Pricing-High_Value-2563eb?style=flat-square">
-</p>
-<p><strong>주요 특징</strong></p>
-<ul>
-<li>월 4000GB의 넉넉한 트래픽.</li>
-<li>합리적인 가격과 뛰어난 트래픽 대비 비용 효율.</li>
-<li>장기 실행 서비스의 배포 비용을 낮추기 좋은 구성.</li>
-</ul>
-<p align="center"><a href="https://my.racknerd.com/aff.php?aff=18708"><img alt="RackNerd" src="https://img.shields.io/badge/View-RackNerd-0284c7?style=for-the-badge"></a></p>
-</td>
-</tr>
-</table>
+일부 링크는 제휴 링크이며, 이를 통해 구매해도 가격은 올라가지 않습니다.
 
 구매 전에 선택한 요금제가 TUN/TAP, OpenVPN 및 필요한 네트워크 프로토콜을 허용하는지 확인하십시오.
 
