@@ -25,7 +25,7 @@
 | --- | --- | --- |
 | **BandwagonHost** | 电信 CN2 GIA、联通 9929、移动 CMIN2 三网优化线路；低延迟、高稳定性，适合 TikTok 直播、海外带货和长期出海业务。 | [立即查看](https://bandwagonhost.com/aff.php?aff=81790) |
 | **RackNerd** | 每月 4000GB 大流量，价格与配置性价比突出；部署成本低，适合需要长期稳定运行的服务。 | [立即查看](https://my.racknerd.com/aff.php?aff=18708) |
-| **OpenMili** | OpenMili 满血中转站 5.6 Sol Ultra & Images 2.0 全场Pro原价号组 0.12 倍率不掺假，不降智，接受压力测试！ | [立即访问](https://openmili.com/) |
+| **OpenMili** | OpenMili 满血中转站 5.6 Sol Ultra & Images 2.0 全场Pro原价号组 0.12倍率 不掺假，不降智，接受压力测试！ | [立即查看](https://openmili.com/) |
 
 部分链接为推广链接，通过这些链接购买不会增加你的费用。
 
